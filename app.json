@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "PipeOptimizerApp",
+    "name": "Aavishkruti",
     "slug": "PipeOptimizerApp",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -8,22 +8,27 @@
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
+      
     },
     "ios": {
       "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "package": "com.alpesh8070.PipeOptimizerApp"
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
+ 
+    "extra": {
+      "eas": {
+        "projectId": "a75afcdf-ce95-472a-a7a4-0ad5f429414a"
+      }
     }
   }
 }

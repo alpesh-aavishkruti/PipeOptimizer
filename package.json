@@ -9,14 +9,22 @@
     "web": "expo start --web"
   },
   "dependencies": {
-    "expo": "~53.0.12",
+    "@react-native-async-storage/async-storage": "^2.1.2",
+    "expo": "53.0.13",
+    "expo-sharing": "~13.1.5",
     "expo-status-bar": "~2.2.3",
+    "javascript-lp-solver": "^0.4.24",
     "react": "19.0.0",
-    "react-native": "0.79.4"
+    "react-native": "0.79.4",
+    "react-native-safe-area-context": "5.4.0",
+    "react-native-svg": "15.11.2",
+    "react-native-vector-icons": "^10.2.0",
+    "react-native-view-shot": "4.0.3"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@types/react": "~19.0.10",
+    "patch-package": "^8.0.0",
     "typescript": "~5.8.3"
   },
   "private": true
