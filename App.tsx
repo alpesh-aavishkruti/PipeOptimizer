@@ -1,6 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import React, { useEffect, useRef, useState } from "react";
-
 import {
   View,
   Text,
@@ -15,203 +14,165 @@ import {
   TouchableOpacity,
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
-import { MaterialIcons } from "@expo/vector-icons"; // ✅ Expo built-in
-
+import { MaterialIcons } from "@expo/vector-icons";
 import { captureRef } from "react-native-view-shot";
 import * as Sharing from "expo-sharing";
+
 // Define types
-type Pipe = {
-  size: number;
+type GlassSheet = {
+  length: number;
+  width: number;
   stock: number;
 };
 
 type OrderPiece = {
   length: number;
+  width: number;
   quantity: number;
 };
 
-type OptimizedPipe = {
-  pipeSize: number;
-  remaining: number;
-  cuts: number[];
+type OptimizedSheet = {
+  sheetSize: { length: number; width: number };
+  remaining: { length: number; width: number };
+  cuts: Array<{ length: number; width: number }>;
   count: number;
   efficiency: number;
 };
 
-type Demand = {
-  length: number;
-  quantity: number;
-};
+const solveGlassCutting = (
+  availableSheets: GlassSheet[],
+  demandList: OrderPiece[]
+): OptimizedSheet[] => {
+  // Create a copy of demands to track remaining
+  const remainingDemands: OrderPiece[] = JSON.parse(JSON.stringify(demandList));
+  const solution: OptimizedSheet[] = [];
 
-const solveCuttingStock = (
-  availablePipes: Pipe[],
-  demandList: Demand[]
-): OptimizedPipe[] => {
-  const remainingDemand = demandList.reduce((acc, d) => {
-    acc[d.length] = d.quantity;
-    return acc;
-  }, {} as Record<number, number>);
+  // Sort sheets by area (smallest first to minimize waste)
+  const sortedSheets = [...availableSheets].sort(
+    (a, b) => a.length * a.width - b.length * b.width
+  );
 
-  const solution: OptimizedPipe[] = [];
+  while (remainingDemands.some((d) => d.quantity > 0)) {
+    let bestSheetIndex = -1;
+    let bestCuts: Array<{ length: number; width: number }> = [];
+    let bestRemaining = { length: 0, width: 0 };
+    let bestEfficiency = 0;
 
-  const generateCuttingPatterns = (
-    pipeSize: number,
-    demands: Record<number, number>
-  ) => {
-    const lengths = Object.keys(demands)
-      .map(Number)
-      .sort((a, b) => b - a);
-    const patterns: Array<{
-      cuts: number[];
-      waste: number;
-      efficiency: number;
-    }> = [];
+    // Try each sheet type to find the best fit
+    for (let i = 0; i < sortedSheets.length; i++) {
+      if (sortedSheets[i].stock <= 0) continue;
 
-    const generatePattern = (
-      remaining: number,
-      currentCuts: number[],
-      lengthIndex: number
-    ) => {
-      if (lengthIndex >= lengths.length) {
-        if (currentCuts.length > 0) {
-          const usedLength = currentCuts.reduce((sum, cut) => sum + cut, 0);
-          const waste = remaining;
-          const efficiency = (usedLength / pipeSize) * 100;
+      const sheet = sortedSheets[i];
+      const cuts: Array<{ length: number; width: number }> = [];
+      const tempDemands = JSON.parse(JSON.stringify(remainingDemands));
+      let remainingLength = sheet.length;
+      let remainingWidth = sheet.width;
 
-          if (efficiency >= 70) {
-            patterns.push({
-              cuts: [...currentCuts],
-              waste,
-              efficiency,
-            });
+      // Sort demands by area (largest first)
+      tempDemands.sort((a, b) => b.length * b.width - a.length * a.width);
+
+      // Try to fit pieces
+      for (const demand of tempDemands) {
+        if (demand.quantity <= 0) continue;
+
+        // Try both orientations (normal and rotated)
+        const fitsNormal =
+          demand.length <= remainingLength && demand.width <= remainingWidth;
+        const fitsRotated =
+          demand.width <= remainingLength && demand.length <= remainingWidth;
+
+        if (fitsNormal || fitsRotated) {
+          const useRotated =
+            fitsRotated &&
+            (!fitsNormal ||
+              demand.width * demand.length > demand.length * demand.width);
+
+          const cutLength = useRotated ? demand.width : demand.length;
+          const cutWidth = useRotated ? demand.length : demand.width;
+
+          const maxPossible = Math.min(
+            demand.quantity,
+            Math.floor(remainingLength / cutLength) *
+              Math.floor(remainingWidth / cutWidth)
+          );
+
+          if (maxPossible > 0) {
+            const piecesToAdd = Math.min(maxPossible, demand.quantity);
+
+            for (let j = 0; j < piecesToAdd; j++) {
+              cuts.push({ length: cutLength, width: cutWidth });
+            }
+
+            demand.quantity -= piecesToAdd;
+
+            // Update remaining space (simplified approach)
+            remainingLength = sheet.length;
+            remainingWidth = sheet.width - cutWidth;
           }
         }
-        return;
       }
 
-      const currentLength = lengths[lengthIndex];
-      const maxPieces = Math.min(
-        Math.floor(remaining / currentLength),
-        demands[currentLength] || 0
+      // Calculate efficiency
+      const usedArea = cuts.reduce(
+        (sum, cut) => sum + cut.length * cut.width,
+        0
       );
+      const totalArea = sheet.length * sheet.width;
+      const efficiency = (usedArea / totalArea) * 100;
 
-      for (let qty = 0; qty <= maxPieces; qty++) {
-        const newCuts = [...currentCuts, ...Array(qty).fill(currentLength)];
-        const newRemaining = remaining - qty * currentLength;
-        generatePattern(newRemaining, newCuts, lengthIndex + 1);
-      }
-    };
-
-    generatePattern(pipeSize, [], 0);
-
-    return patterns.sort((a, b) => {
-      if (Math.abs(a.efficiency - b.efficiency) < 0.1) {
-        return a.waste - b.waste;
-      }
-      return b.efficiency - a.efficiency;
-    });
-  };
-
-  // Main optimization loop
-  while (Object.values(remainingDemand).some((qty) => qty > 0)) {
-    let bestPattern = null;
-    let bestPipeSize = 0;
-    let bestScore = -1;
-
-    for (const pipe of availablePipes) {
-      if (pipe.stock <= 0) continue;
-
-      const patterns = generateCuttingPatterns(pipe.size, remainingDemand);
-
-      for (const pattern of patterns) {
-        const canUse = pattern.cuts.every((length) => {
-          const needed = pattern.cuts.filter((cut) => cut === length).length;
-          return (remainingDemand[length] || 0) >= needed;
-        });
-
-        if (canUse) {
-          const demandSatisfied = pattern.cuts.reduce((score, length) => {
-            return score + (remainingDemand[length] || 0);
-          }, 0);
-
-          const score = pattern.efficiency + demandSatisfied * 10;
-
-          if (score > bestScore) {
-            bestScore = score;
-            bestPattern = pattern;
-            bestPipeSize = pipe.size;
-          }
-          break;
-        }
-      }
-    }
-
-    if (!bestPattern) {
-      const sortedLengths = Object.keys(remainingDemand)
-        .map(Number)
-        .filter((length) => remainingDemand[length] > 0)
-        .sort((a, b) => b - a);
-
-      if (sortedLengths.length === 0) break;
-
-      const largestPiece = sortedLengths[0];
-      const suitablePipe = availablePipes
-        .filter((pipe) => pipe.size >= largestPiece && pipe.stock > 0)
-        .sort((a, b) => a.size - b.size)[0];
-
-      if (suitablePipe) {
-        const cuts: number[] = [];
-        let remaining = suitablePipe.size;
-
-        for (const length of sortedLengths) {
-          while (remaining >= length && remainingDemand[length] > 0) {
-            cuts.push(length);
-            remaining -= length;
-            remainingDemand[length]--;
-          }
-        }
-
-        const usedLength = cuts.reduce((sum, cut) => sum + cut, 0);
-        bestPattern = {
-          cuts,
-          waste: remaining,
-          efficiency: (usedLength / suitablePipe.size) * 100,
+      // Check if this is better than current best
+      if (efficiency > bestEfficiency) {
+        bestSheetIndex = i;
+        bestCuts = cuts;
+        bestRemaining = {
+          length: remainingLength,
+          width: remainingWidth,
         };
-        bestPipeSize = suitablePipe.size;
-      } else {
-        break;
+        bestEfficiency = efficiency;
       }
     }
 
-    if (bestPattern) {
-      bestPattern.cuts.forEach((length) => {
-        remainingDemand[length] = Math.max(0, remainingDemand[length] - 1);
+    if (bestSheetIndex === -1) {
+      // No sheet could fit the remaining demands
+      break;
+    }
+
+    // Add this to our solution
+    const usedSheet = sortedSheets[bestSheetIndex];
+    const existingSolution = solution.find(
+      (s) =>
+        s.sheetSize.length === usedSheet.length &&
+        s.sheetSize.width === usedSheet.width &&
+        JSON.stringify(s.cuts) === JSON.stringify(bestCuts)
+    );
+
+    if (existingSolution) {
+      existingSolution.count++;
+    } else {
+      solution.push({
+        sheetSize: {
+          length: usedSheet.length,
+          width: usedSheet.width,
+        },
+        cuts: bestCuts,
+        remaining: bestRemaining,
+        count: 1,
+        efficiency: bestEfficiency,
       });
+    }
 
-      const pipeIndex = availablePipes.findIndex(
-        (p) => p.size === bestPipeSize
-      );
-      if (pipeIndex >= 0) {
-        availablePipes[pipeIndex].stock--;
-      }
+    // Reduce stock
+    sortedSheets[bestSheetIndex].stock--;
 
-      const existingIndex = solution.findIndex(
-        (s) =>
-          s.pipeSize === bestPipeSize &&
-          JSON.stringify(s.cuts.sort()) ===
-            JSON.stringify(bestPattern.cuts.sort())
+    // Update remaining demands
+    for (let i = 0; i < remainingDemands.length; i++) {
+      const tempDemand = remainingDemands[i];
+      const solvedDemand = demandList.find(
+        (d) => d.length === tempDemand.length && d.width === tempDemand.width
       );
 
-      if (existingIndex >= 0) {
-        solution[existingIndex].count++;
-      } else {
-        solution.push({
-          pipeSize: bestPipeSize,
-          remaining: bestPattern.waste,
-          cuts: bestPattern.cuts,
-          count: 1,
-          efficiency: bestPattern.efficiency,
-        });
+      if (solvedDemand) {
+        remainingDemands[i].quantity = solvedDemand.quantity;
       }
     }
   }
@@ -219,118 +180,132 @@ const solveCuttingStock = (
   return solution;
 };
 
-export default function PipeOptimizer() {
+const MetricCard = ({ label, value }: { label: string; value: string }) => (
+  <View style={styles.metricCard}>
+    <Text style={styles.metricLabel}>{label}</Text>
+    <Text style={styles.metricValue}>{value}</Text>
+  </View>
+);
+
+export default function GlassOptimizer() {
   const [orderPieces, setOrderPieces] = useState<OrderPiece[]>([]);
   const [lengthInput, setLengthInput] = useState<string>("");
-  const [pipeSizeInput, setPipeSizeInput] = useState<string>("");
+  const [widthInput, setWidthInput] = useState<string>("");
+  const [sheetLengthInput, setSheetLengthInput] = useState<string>("");
+  const [sheetWidthInput, setSheetWidthInput] = useState<string>("");
   const [stockInput, setStockInput] = useState<string>("");
   const [quantityInput, setQuantityInput] = useState<string>("");
-  const [activeTab, setActiveTab] = useState<"pipes" | "calculator">("pipes");
-
-  const [availablePipes, setAvailablePipes] = useState<Pipe[]>([]);
-
-  const [optimized, setOptimized] = useState<OptimizedPipe[]>([]);
+  const [activeTab, setActiveTab] = useState<"sheets" | "calculator">("sheets");
+  const [availableSheets, setAvailableSheets] = useState<GlassSheet[]>([]);
+  const [optimized, setOptimized] = useState<OptimizedSheet[]>([]);
   const [totalPiecesNeeded, setTotalPiecesNeeded] = useState(0);
   const [totalPiecesCut, setTotalPiecesCut] = useState(0);
-  const [uncutCount, setUncutCount] = useState(0); // Add this in your component state
-
-  const flattenPieces = (): number[] => {
-    const pieces: number[] = [];
-    orderPieces.forEach(({ length, quantity }) => {
-      for (let i = 0; i < quantity; i++) {
-        pieces.push(length);
-      }
-    });
-    return pieces;
-  };
+  const viewRef = useRef<View>(null);
 
   useEffect(() => {
-    const loadPipes = async () => {
+    const loadSheets = async () => {
       try {
-        const stored = await AsyncStorage.getItem("availablePipes");
+        const stored = await AsyncStorage.getItem("availableSheets");
         if (stored) {
-          setAvailablePipes(JSON.parse(stored));
+          setAvailableSheets(JSON.parse(stored));
         }
       } catch (e) {
-        console.error("Failed to load pipes", e);
+        console.error("Failed to load sheets", e);
       }
     };
 
-    loadPipes();
+    loadSheets();
   }, []);
 
   useEffect(() => {
-    const savePipes = async () => {
+    const saveSheets = async () => {
       try {
         await AsyncStorage.setItem(
-          "availablePipes",
-          JSON.stringify(availablePipes)
+          "availableSheets",
+          JSON.stringify(availableSheets)
         );
       } catch (e) {
-        console.error("Failed to save pipes", e);
+        console.error("Failed to save sheets", e);
       }
     };
 
-    savePipes();
-  }, [availablePipes]);
+    saveSheets();
+  }, [availableSheets]);
 
-  const optimizePipes = () => {
-    const pieces = flattenPieces();
-    if (pieces.length === 0) return;
+  const optimizeGlass = () => {
+    if (orderPieces.length === 0) return;
 
-    const demandList: Demand[] = [];
-    const pieceCounts = pieces.reduce((acc, p) => {
-      acc[p] = (acc[p] || 0) + 1;
-      return acc;
-    }, {} as Record<number, number>);
+    const demandList = orderPieces
+      .filter((piece) => piece.quantity > 0)
+      .map((piece) => ({ ...piece }));
 
-    Object.entries(pieceCounts).forEach(([length, quantity]) => {
-      demandList.push({ length: Number(length), quantity });
-    });
-
-    // Create a copy of available pipes to avoid modifying original
-    const pipesCopy = availablePipes.map((pipe) => ({ ...pipe }));
-    const optimizedResult = solveCuttingStock(pipesCopy, demandList);
+    const sheetsCopy = JSON.parse(JSON.stringify(availableSheets));
+    const optimizedResult = solveGlassCutting(sheetsCopy, demandList);
     setOptimized(optimizedResult);
 
     // Calculate totals
-    const totalNeeded = pieces.length;
-    const totalCut = optimizedResult.reduce((sum, opt) => {
-      return sum + opt.cuts.length * opt.count;
-    }, 0);
+    const totalNeeded = orderPieces.reduce(
+      (sum, piece) => sum + piece.quantity,
+      0
+    );
+    const totalCut = optimizedResult.reduce(
+      (sum, sheet) => sum + sheet.cuts.length * sheet.count,
+      0
+    );
 
     setTotalPiecesNeeded(totalNeeded);
     setTotalPiecesCut(totalCut);
-    setUncutCount(totalNeeded - totalCut);
   };
 
-  const resetAll = (): void => {
+  const resetAll = () => {
     setOrderPieces([]);
     setLengthInput("");
+    setWidthInput("");
+    setSheetLengthInput("");
+    setSheetWidthInput("");
     setQuantityInput("");
-    setPipeSizeInput("");
     setStockInput("");
     setOptimized([]);
-    setAvailablePipes([]);
+    setAvailableSheets([]);
     setTotalPiecesNeeded(0);
     setTotalPiecesCut(0);
   };
 
-  const removePipe = (sizeToRemove: number): void => {
-    setAvailablePipes((prev) => prev.filter((p) => p.size !== sizeToRemove));
+  const removeSheet = (length: number, width: number) => {
+    setAvailableSheets((prev) =>
+      prev.filter(
+        (sheet) => !(sheet.length === length && sheet.width === width)
+      )
+    );
   };
 
-  const removeOrderPiece = (indexToRemove: number): void => {
-    setOrderPieces(orderPieces.filter((_, index) => index !== indexToRemove));
+  const removeOrderPiece = (indexToRemove: number) => {
+    setOrderPieces((prev) =>
+      prev.filter((_, index) => index !== indexToRemove)
+    );
   };
-  const viewRef = useRef();
 
-  const getCutCounts = (cuts) => {
+  const getCutCounts = (cuts: Array<{ length: number; width: number }>) => {
     return cuts.reduce((acc, cut) => {
-      acc[cut] = (acc[cut] || 0) + 1;
+      const key = `${cut.length}x${cut.width}`;
+      acc[key] = (acc[key] || 0) + 1;
       return acc;
-    }, {});
+    }, {} as Record<string, number>);
   };
+
+  const shareResults = async () => {
+    try {
+      if (!viewRef.current) return;
+      const uri = await captureRef(viewRef, {
+        format: "png",
+        quality: 1,
+      });
+      await Sharing.shareAsync(uri);
+    } catch (error) {
+      console.error("Error sharing results:", error);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" backgroundColor="#1a365d" />
@@ -338,34 +313,27 @@ export default function PipeOptimizer() {
       {/* Header */}
       <View style={styles.headerContainer}>
         <View style={styles.headerBackground}>
-          {/* Decorative elements */}
-
-          {/* Main title with custom styling */}
           <View style={styles.titleContainer}>
-            <View>
-              {/* Logo from assets */}
-              <Image
-                source={require("./assets/aavishkruti-logo.png")}
-                style={styles.logo}
-                resizeMode="contain"
-              />
-            </View>
+            <Image
+              source={require("./assets/aavishkruti-logo.png")}
+              style={styles.logo}
+              resizeMode="contain"
+            />
           </View>
         </View>
       </View>
 
-      {/* Enhanced Tab Container */}
+      {/* Tabs */}
       <View style={styles.tabContainer}>
         <Pressable
           style={({ pressed }) => [
             styles.tab,
-            activeTab === "pipes" && styles.tabActive,
+            activeTab === "sheets" && styles.tabActive,
             pressed && styles.tabPressed,
           ]}
-          onPress={() => setActiveTab("pipes")}
+          onPress={() => setActiveTab("sheets")}
         >
           <View style={styles.tabContent}>
-            {/* Custom Pipe SVG Icon */}
             <Svg
               width={20}
               height={20}
@@ -374,23 +342,22 @@ export default function PipeOptimizer() {
             >
               <Path
                 d="M19 5v14H5V5h14m0-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"
-                fill={activeTab === "pipes" ? "#fff" : "#f97316"}
+                fill={activeTab === "sheets" ? "#fff" : "#f97316"}
               />
               <Path
                 d="M8 8h8v8H8z"
-                fill={activeTab === "pipes" ? "#fff" : "#f97316"}
+                fill={activeTab === "sheets" ? "#fff" : "#f97316"}
               />
             </Svg>
             <Text
               style={[
                 styles.tabtext,
-                activeTab === "pipes" && styles.tabtextActive,
+                activeTab === "sheets" && styles.tabtextActive,
               ]}
             >
-              Pipe Sizes
+              Glass Sheets
             </Text>
           </View>
-          {activeTab === "pipes"}
         </Pressable>
 
         <Pressable
@@ -402,7 +369,6 @@ export default function PipeOptimizer() {
           onPress={() => setActiveTab("calculator")}
         >
           <View style={styles.tabContent}>
-            {/* Custom Calculator SVG Icon */}
             <Svg
               width={20}
               height={20}
@@ -427,7 +393,6 @@ export default function PipeOptimizer() {
               Calculator
             </Text>
           </View>
-          {activeTab === "calculator"}
         </Pressable>
       </View>
 
@@ -435,31 +400,37 @@ export default function PipeOptimizer() {
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
       >
-        {activeTab === "pipes" && (
+        {activeTab === "sheets" && (
           <View style={styles.section}>
-            {/* Enhanced Input Card */}
             <View style={styles.inputCard}>
               <View style={styles.inputRow}>
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Pipe Size (inch)</Text>
-                  <View style={styles.inputWrapper}>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="e.g., 100"
-                      placeholderTextColor="#9ca3af"
-                      value={pipeSizeInput}
-                      keyboardType="numeric"
-                      onChangeText={setPipeSizeInput}
-                    />
-                  </View>
+                  <Text style={styles.inputLabel}>Sheet Length (mm)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="e.g., 2440"
+                    value={sheetLengthInput}
+                    keyboardType="numeric"
+                    onChangeText={setSheetLengthInput}
+                  />
                 </View>
-
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Sheet Width (mm)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="e.g., 1220"
+                    value={sheetWidthInput}
+                    keyboardType="numeric"
+                    onChangeText={setSheetWidthInput}
+                  />
+                </View>
+              </View>
+              <View style={styles.inputRow}>
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>Stock Quantity</Text>
                   <TextInput
                     style={styles.input}
                     placeholder="e.g., 10"
-                    placeholderTextColor="#9ca3af"
                     value={stockInput}
                     keyboardType="numeric"
                     onChangeText={setStockInput}
@@ -474,80 +445,84 @@ export default function PipeOptimizer() {
                 ]}
                 onPress={() => {
                   Keyboard.dismiss();
-                  const size = parseInt(pipeSizeInput.trim());
-                  const stock = parseInt(stockInput.trim());
+                  const length = parseInt(sheetLengthInput);
+                  const width = parseInt(sheetWidthInput);
+                  const stock = parseInt(stockInput);
 
-                  if (!isNaN(size) && !isNaN(stock) && size > 0 && stock > 0) {
-                    setAvailablePipes((prev) => {
+                  if (
+                    !isNaN(length) &&
+                    !isNaN(width) &&
+                    !isNaN(stock) &&
+                    length > 0 &&
+                    width > 0 &&
+                    stock > 0
+                  ) {
+                    setAvailableSheets((prev) => {
                       const existingIndex = prev.findIndex(
-                        (p) => p.size === size
+                        (s) => s.length === length && s.width === width
                       );
                       if (existingIndex !== -1) {
-                        // Pipe size already exists – update stock
                         const updated = [...prev];
                         updated[existingIndex].stock += stock;
                         return updated;
                       } else {
-                        // Add new pipe
-                        return [...prev, { size, stock }];
+                        return [...prev, { length, width, stock }];
                       }
                     });
-
-                    setPipeSizeInput("");
+                    setSheetLengthInput("");
+                    setSheetWidthInput("");
                     setStockInput("");
                   }
                 }}
               >
                 <View style={styles.addButtonContent}>
                   <Text style={styles.addButtonIcon}>+</Text>
-                  <Text style={styles.addButtonText}>Add to Inventory</Text>
+                  <Text style={styles.addButtonText}>Add Sheet</Text>
                 </View>
               </Pressable>
             </View>
 
-            {/* Modern Table Design */}
             <View style={styles.tableContainer}>
-              {availablePipes.length === 0 ? (
+              {availableSheets.length === 0 ? (
                 <View style={styles.emptyState}>
                   <View style={styles.emptyStateIconContainer}>
                     <Text style={styles.emptyStateIcon}>📦</Text>
                   </View>
                   <Text style={styles.emptyStateText}>
-                    No pipes in inventory
+                    No glass sheets in inventory
                   </Text>
                   <Text style={styles.emptyStateSubtext}>
-                    Add pipes using the form above
+                    Add sheets using the form above
                   </Text>
                 </View>
               ) : (
                 <>
                   <View style={styles.tableHeader}>
-                    <Text style={styles.tableHeaderText}>Pipe Size</Text>
+                    <Text style={styles.tableHeaderText}>Size (mm)</Text>
                     <Text style={styles.tableHeaderText}>Stock</Text>
                     <Text style={styles.tableHeaderText}>Action</Text>
                   </View>
 
-                  {availablePipes.map((pipe, index) => (
+                  {availableSheets.map((sheet, index) => (
                     <View key={index} style={styles.tableRow}>
                       <View style={styles.tableCell}>
-                        <Text style={styles.tableCellText}>{pipe.size} "</Text>
+                        <Text style={styles.tableCellText}>
+                          {sheet.length}×{sheet.width}
+                        </Text>
                       </View>
-
                       <View style={styles.tableCell}>
-                        <View style={[styles.stockBadge]}>
+                        <View style={styles.stockBadge}>
                           <Text style={styles.stockBadgeText}>
-                            {pipe.stock}
+                            {sheet.stock}
                           </Text>
                         </View>
                       </View>
-
                       <View style={styles.tableCell}>
                         <Pressable
                           style={({ pressed }) => [
-                            // styles.deleteButton,
                             pressed && styles.deleteButtonPressed,
                           ]}
-                          onPress={() => removePipe(pipe.size)}
+                          onPress={() => removeSheet(sheet.length, sheet.width)}
                         >
                           <Text style={styles.deleteButtonIcon}>🗑️</Text>
                         </Pressable>
@@ -562,29 +537,35 @@ export default function PipeOptimizer() {
 
         {activeTab === "calculator" && (
           <View style={styles.section}>
-            {/* Enhanced Input Card */}
             <View style={styles.inputCard}>
               <View style={styles.inputRow}>
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Cut Length (inch)</Text>
-                  <View style={styles.inputWrapper}>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="e.g., 2500"
-                      placeholderTextColor="#9ca3af"
-                      value={lengthInput}
-                      keyboardType="numeric"
-                      onChangeText={setLengthInput}
-                    />
-                  </View>
+                  <Text style={styles.inputLabel}>Piece Length (mm)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="e.g., 600"
+                    value={lengthInput}
+                    keyboardType="numeric"
+                    onChangeText={setLengthInput}
+                  />
                 </View>
-
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Piece Width (mm)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="e.g., 400"
+                    value={widthInput}
+                    keyboardType="numeric"
+                    onChangeText={setWidthInput}
+                  />
+                </View>
+              </View>
+              <View style={styles.inputRow}>
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>Quantity</Text>
                   <TextInput
                     style={styles.input}
                     placeholder="e.g., 5"
-                    placeholderTextColor="#9ca3af"
                     value={quantityInput}
                     keyboardType="numeric"
                     onChangeText={setQuantityInput}
@@ -599,27 +580,33 @@ export default function PipeOptimizer() {
                 ]}
                 onPress={() => {
                   const length = parseInt(lengthInput);
+                  const width = parseInt(widthInput);
                   const quantity = parseInt(quantityInput);
                   if (
                     !isNaN(length) &&
+                    !isNaN(width) &&
                     !isNaN(quantity) &&
                     length > 0 &&
+                    width > 0 &&
                     quantity > 0
                   ) {
-                    setOrderPieces([...orderPieces, { length, quantity }]);
+                    setOrderPieces([
+                      ...orderPieces,
+                      { length, width, quantity },
+                    ]);
                     setLengthInput("");
+                    setWidthInput("");
                     setQuantityInput("");
                   }
                 }}
               >
                 <View style={styles.addButtonContent}>
                   <Text style={styles.addButtonIcon}>+</Text>
-                  <Text style={styles.addButtonText}>Add Cut Requirement</Text>
+                  <Text style={styles.addButtonText}>Add Piece</Text>
                 </View>
               </Pressable>
             </View>
 
-            {/* Modern Table Design */}
             <View style={styles.tableContainer}>
               {orderPieces.length === 0 ? (
                 <View style={styles.emptyState}>
@@ -630,13 +617,13 @@ export default function PipeOptimizer() {
                     No cutting requirements
                   </Text>
                   <Text style={styles.emptyStateSubtext}>
-                    Add cut lengths and quantities above
+                    Add glass pieces to cut above
                   </Text>
                 </View>
               ) : (
                 <>
                   <View style={styles.tableHeader}>
-                    <Text style={styles.tableHeaderText}>Length</Text>
+                    <Text style={styles.tableHeaderText}>Size (mm)</Text>
                     <Text style={styles.tableHeaderText}>Qty</Text>
                     <Text style={styles.tableHeaderText}></Text>
                   </View>
@@ -645,10 +632,9 @@ export default function PipeOptimizer() {
                     <View key={index} style={styles.tableRow}>
                       <View style={styles.tableCell}>
                         <Text style={styles.tableCellText}>
-                          {item.length} "
+                          {item.length}×{item.width}
                         </Text>
                       </View>
-
                       <View style={styles.tableCell}>
                         <View style={styles.quantityBadge}>
                           <Text style={styles.quantityBadgeText}>
@@ -656,11 +642,9 @@ export default function PipeOptimizer() {
                           </Text>
                         </View>
                       </View>
-
                       <View style={styles.tableCell}>
                         <Pressable
                           style={({ pressed }) => [
-                            // styles.deleteButton,
                             pressed && styles.deleteButtonPressed,
                           ]}
                           onPress={() => removeOrderPiece(index)}
@@ -676,7 +660,6 @@ export default function PipeOptimizer() {
           </View>
         )}
 
-        {/* Enhanced Action Buttons */}
         <View style={styles.actionButtons}>
           {activeTab === "calculator" && (
             <Pressable
@@ -685,12 +668,8 @@ export default function PipeOptimizer() {
                 orderPieces.length === 0 && styles.buttonDisabled,
                 pressed && styles.optimizeButtonPressed,
               ]}
-              onPress={optimizePipes}
+              onPress={optimizeGlass}
               disabled={orderPieces.length === 0}
-              android_ripple={{
-                color: "rgba(255,255,255,0.3)",
-                borderless: false,
-              }}
             >
               <View style={styles.buttonContent}>
                 <Text style={styles.optimizeButtonIcon}>✂️</Text>
@@ -705,7 +684,6 @@ export default function PipeOptimizer() {
               pressed && styles.resetButtonPressed,
             ]}
             onPress={resetAll}
-            android_ripple={{ color: "rgba(0,0,0,0.1)", borderless: false }}
           >
             <View style={styles.buttonContent}>
               <Text style={styles.resetButtonIcon}>🔄</Text>
@@ -714,148 +692,151 @@ export default function PipeOptimizer() {
           </Pressable>
         </View>
 
-        {/* Enhanced Results Section */}
         {optimized.length > 0 && (
           <View style={styles.resultsSection}>
-            {/* Results Header with Celebration Icon */}
             <View style={styles.resultsHeader}>
               <Text style={styles.resultsSectionTitle}>
                 Optimization Results
               </Text>
-              <TouchableOpacity
-                style={styles.successBadge}
-                onPress={async () => {
-                  try {
-                    const uri = await captureRef(viewRef, {
-                      format: "png",
-                      quality: 1,
-                    });
-                    await Sharing.shareAsync(uri);
-                  } catch (error) {
-                    console.error("Error capturing screenshot:", error);
-                  }
-                }}
-              >
-                <View>
-                  {/* Logo from assets */}
-                  <MaterialIcons name="share" size={24} />
-                </View>
+              <TouchableOpacity onPress={shareResults}>
+                <MaterialIcons name="share" size={24} color="#3b82f6" />
               </TouchableOpacity>
             </View>
-            <View ref={viewRef} collapsable={false}>
-              {/* Stats Cards Row */}
-              <View style={styles.summarySection}>
-                <Text style={styles.sectionTitle}>Required Stocks</Text>
 
-                {/* Table Header */}
+            <View ref={viewRef} collapsable={false}>
+              <View style={styles.summarySection}>
+                <Text style={styles.sectionTitle}>Required Sheets</Text>
                 <View style={[styles.summaryRow, styles.summaryHeader]}>
-                  <Text style={styles.summaryHeaderText}>Stock Length</Text>
-                  <Text style={styles.summaryHeaderText}>Size</Text>
-                  <Text style={styles.summaryHeaderText}>Qty</Text>
+                  <Text style={styles.summaryHeaderText}>Sheet Size</Text>
+                  <Text style={styles.summaryHeaderText}>Quantity</Text>
                 </View>
 
-                {/* Table Rows */}
                 {Object.entries(
                   optimized.reduce((acc: any, layout) => {
-                    const key = layout.pipeSize;
+                    const key = `${layout.sheetSize.length}x${layout.sheetSize.width}`;
                     acc[key] = (acc[key] || 0) + layout.count;
                     return acc;
                   }, {})
-                ).map(([pipeSize, totalCount]) => (
-                  <View key={pipeSize} style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>Stock length</Text>
-                    <Text style={styles.summaryValue}>{pipeSize}"</Text>
+                ).map(([sheetSize, totalCount]) => (
+                  <View key={sheetSize} style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>{sheetSize} mm</Text>
                     <Text style={styles.summaryQty}>× {totalCount}</Text>
                   </View>
                 ))}
 
-                {/* Total Row */}
                 <View style={[styles.summaryRow, styles.summaryTotalRow]}>
-                  <Text style={styles.summaryLabel}>Total Pipes Used</Text>
+                  <Text style={styles.summaryLabel}>Total Sheets Used</Text>
                   <Text style={styles.summaryValue}>
                     {optimized.reduce((sum, layout) => sum + layout.count, 0)}
                   </Text>
                 </View>
               </View>
 
-              {/* Metrics Section */}
               <View style={styles.metricsGrid}>
                 <MetricCard
-                  label="Total parts length (Qty)"
+                  label="Total pieces area (Qty)"
                   value={`${orderPieces.reduce(
-                    (sum, piece) => sum + piece.length * piece.quantity,
+                    (sum, piece) =>
+                      sum + piece.length * piece.width * piece.quantity,
                     0
-                  )} (${totalPiecesCut})`}
+                  )} mm² (${totalPiecesCut})`}
                 />
                 <MetricCard
-                  label="Used stocks total length (Yield)"
+                  label="Used sheets total area"
                   value={`${optimized.reduce(
-                    (sum, layout) => sum + layout.pipeSize * layout.count,
+                    (sum, layout) =>
+                      sum +
+                      layout.sheetSize.length *
+                        layout.sheetSize.width *
+                        layout.count,
                     0
-                  )} (${(
+                  )} mm²`}
+                />
+                <MetricCard
+                  label="Material Utilization"
+                  value={`${(
                     (orderPieces.reduce(
-                      (sum, piece) => sum + piece.length * piece.quantity,
+                      (sum, piece) =>
+                        sum + piece.length * piece.width * piece.quantity,
                       0
                     ) /
                       optimized.reduce(
-                        (sum, layout) => sum + layout.pipeSize * layout.count,
+                        (sum, layout) =>
+                          sum +
+                          layout.sheetSize.length *
+                            layout.sheetSize.width *
+                            layout.count,
                         0
                       )) *
                     100
-                  ).toFixed(1)}%)`}
+                  ).toFixed(1)}%`}
                 />
                 <MetricCard
-                  label="Total cutting layouts"
+                  label="Total layouts"
                   value={optimized.length.toString()}
-                />
-                <MetricCard
-                  label="Total number of cuts"
-                  value={optimized
-                    .reduce(
-                      (sum, layout) => sum + layout.cuts.length * layout.count,
-                      0
-                    )
-                    .toString()}
                 />
               </View>
 
-              {/* Cutting Layouts */}
-              {optimized.map((layout, idx) => (
+              {optimized.map((sheet, idx) => (
                 <View key={idx} style={styles.layoutCard}>
-                  <Text style={styles.layoutId}>Layout ID {idx + 1}</Text>
+                  <Text style={styles.layoutId}>Layout {idx + 1}</Text>
                   <Text style={styles.layoutInfo}>
-                    Repetition: {layout.count}x | Stock length:{" "}
-                    {layout.pipeSize}"
+                    Repetition: {sheet.count}x | Sheet: {sheet.sheetSize.length}
+                    ×{sheet.sheetSize.width}mm
                   </Text>
 
-                  {/* Part List */}
-                  {Object.entries(getCutCounts(layout.cuts)).map(
-                    ([cut, count], i) => (
-                      <View key={i} style={styles.cutRow}>
-                        <Text style={styles.cutLabel}>{cut}"</Text>
-                        <Text style={styles.cutQty}>× {count}</Text>
-                      </View>
-                    )
-                  )}
+                  <View
+                    style={[
+                      styles.sheetVisual,
+                      {
+                        aspectRatio:
+                          sheet.sheetSize.width / sheet.sheetSize.length,
+                      },
+                    ]}
+                  >
+                    {sheet.cuts.map((cut, i) => {
+                      const widthPercent =
+                        (cut.width / sheet.sheetSize.width) * 100;
+                      const heightPercent =
+                        (cut.length / sheet.sheetSize.length) * 100;
+                      return (
+                        <View
+                          key={i}
+                          style={[
+                            styles.cutVisual,
+                            {
+                              width: `${widthPercent}%`,
+                              height: `${heightPercent}%`,
+                              backgroundColor: `hsl(${i * 30}, 70%, 80%)`,
+                            },
+                          ]}
+                        >
+                          <Text style={styles.cutVisualText}>
+                            {cut.length}×{cut.width}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                  </View>
 
-                  {/* Visual Cut Bar */}
-                  <View style={styles.cutBar}>
-                    {layout.cuts.map((cut, i) => (
-                      <View key={i} style={styles.cutBlock}>
-                        <Text style={styles.cutBlockText}>{cut}"</Text>
-                      </View>
-                    ))}
+                  <View style={styles.cutList}>
+                    {Object.entries(getCutCounts(sheet.cuts)).map(
+                      ([size, count], i) => (
+                        <View key={i} style={styles.cutListItem}>
+                          <Text style={styles.cutListSize}>{size} mm</Text>
+                          <Text style={styles.cutListQty}>× {count}</Text>
+                        </View>
+                      )
+                    )}
                   </View>
 
                   <View style={styles.layoutFooter}>
                     <Text style={styles.footerText}>
-                      Cuts: {layout.cuts.length}
+                      Efficiency: {sheet.efficiency.toFixed(1)}%
                     </Text>
                     <Text style={styles.footerText}>
-                      Remnant: {layout.remaining}"
-                    </Text>
-                    <Text style={styles.footerText}>
-                      Efficiency: {layout.efficiency.toFixed(1)}%
+                      Remnant: {sheet.remaining.length}×{sheet.remaining.width}
+                      mm
                     </Text>
                   </View>
                 </View>
@@ -868,348 +849,268 @@ export default function PipeOptimizer() {
   );
 }
 
-const MetricCard = ({ label, value }: any) => (
-  <View style={styles.metricCard}>
-    <Text style={styles.metricValue}>{value}</Text>
-    <Text style={styles.metricLabel}>{label}</Text>
-  </View>
-);
 const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: "#f8fafc",
+  },
   headerContainer: {
     paddingBottom: 15,
   },
   headerBackground: {
     backgroundColor: "#f8f9fa",
-    paddingTop: 60,
-    paddingBottom: 30,
-    borderBottomLeftRadius: 25,
-    borderBottomRightRadius: 25,
-    overflow: "hidden",
-    position: "relative",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  logo: {
-    width: 300,
-    height: 40,
-  },
-  sharelogo: {
-    width: 50,
-    height: 40,
-    backgroundColor: "#f8f9fa",
+    paddingTop: 20,
   },
 
   titleContainer: {
+    flexDirection: "row",
+    justifyContent: "center",
     alignItems: "center",
-    position: "relative",
-    zIndex: 2,
+    paddingVertical: 12,
   },
-  titleMain: {},
-
+  logo: {
+    height: 40,
+    width: 200,
+  },
   tabContainer: {
     flexDirection: "row",
     backgroundColor: "#fff",
-    marginHorizontal: 20,
-    marginTop: -20,
-    borderRadius: 15,
-    elevation: 8,
-    shadowColor: "#f97316",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    overflow: "hidden",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
   },
   tab: {
     flex: 1,
-    paddingVertical: 16,
+    paddingVertical: 12,
     alignItems: "center",
-    backgroundColor: "transparent",
-    position: "relative",
+    justifyContent: "center",
   },
   tabActive: {
     backgroundColor: "#f97316",
   },
   tabPressed: {
     opacity: 0.8,
-    transform: [{ scale: 0.98 }],
   },
   tabContent: {
-    alignItems: "center",
     flexDirection: "row",
-    gap: 8,
+    alignItems: "center",
   },
   tabIcon: {
-    marginBottom: 2,
+    marginRight: 8,
   },
   tabtext: {
-    color: "#f97316",
     fontSize: 14,
-    fontWeight: "600",
-    letterSpacing: 0.3,
+    fontWeight: "500",
+    color: "#f97316",
   },
   tabtextActive: {
     color: "#fff",
-    fontWeight: "700",
   },
-  activeIndicator: {
-    position: "absolute",
-    bottom: 0,
-    width: "40%",
-    height: 3,
-    backgroundColor: "#fff",
-    borderRadius: 2,
+  scrollView: {
+    flex: 1,
   },
   section: {
-    marginTop: 20,
-    paddingHorizontal: 16,
+    padding: 16,
   },
   inputCard: {
     backgroundColor: "#fff",
-    borderRadius: 12,
+    borderRadius: 8,
     padding: 16,
-    marginBottom: 20,
+    marginBottom: 16,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
     elevation: 2,
   },
   inputRow: {
     flexDirection: "row",
-    gap: 12,
-    marginBottom: 16,
+    marginBottom: 12,
   },
   inputGroup: {
     flex: 1,
+    marginRight: 8,
   },
   inputLabel: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#4b5563",
-    marginBottom: 6,
-  },
-  inputWrapper: {
-    flexDirection: "row",
-    alignItems: "center",
-    // borderWidth: 1,
-    // borderColor: "#e5e7eb",
-    // borderRadius: 8,
-    overflow: "hidden",
+    fontSize: 12,
+    fontWeight: "500",
+    color: "#64748b",
+    marginBottom: 4,
   },
   input: {
-    flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    fontSize: 16,
+    backgroundColor: "#f8fafc",
     borderWidth: 1,
-    borderColor: "#e5e7eb",
-    borderRadius: 8,
-    color: "#1f2937",
-    backgroundColor: "#f9fafb",
-  },
-  inputUnit: {
-    paddingHorizontal: 12,
+    borderColor: "#e2e8f0",
+    borderRadius: 4,
+    padding: 8,
     fontSize: 14,
-    color: "#6b7280",
-    backgroundColor: "#f3f4f6",
   },
   addButton: {
     backgroundColor: "#f97316",
-    borderRadius: 8,
-    paddingVertical: 12,
+    borderRadius: 4,
+    padding: 12,
+    alignItems: "center",
   },
   addButtonPressed: {
-    opacity: 0.9,
-    transform: [{ scale: 0.98 }],
+    backgroundColor: "#ea580c",
   },
   addButtonContent: {
     flexDirection: "row",
-    justifyContent: "center",
     alignItems: "center",
-    gap: 8,
+    justifyContent: "center",
   },
   addButtonIcon: {
     color: "#fff",
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: "bold",
+    marginRight: 8,
   },
   addButtonText: {
     color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
+    fontWeight: "500",
   },
   tableContainer: {
     backgroundColor: "#fff",
-    borderRadius: 12,
+    borderRadius: 8,
     overflow: "hidden",
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
     elevation: 2,
   },
-  tableHeader: {
-    flexDirection: "row",
-    backgroundColor: "#f9fafb",
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#e5e7eb",
-  },
-  tableHeaderText: {
-    flex: 1,
-    textAlign: "center",
-    fontWeight: "600",
-    color: "#4b5563",
-    fontSize: 14,
-  },
-  tableRow: {
-    flexDirection: "row",
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: "#f3f4f6",
-  },
-  tableCell: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  tableCellText: {
-    fontSize: 15,
-    color: "#1f2937",
-    fontWeight: "500",
-  },
-  stockBadge: {
-    backgroundColor: "#d1fae5",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    minWidth: 40,
-  },
-  lowStockBadge: {
-    backgroundColor: "#fee2e2",
-  },
-  stockBadgeText: {
-    color: "#065f46",
-    fontWeight: "600",
-    textAlign: "center",
-  },
-  deleteButton: {
-    backgroundColor: "#fee2e2",
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  deleteButtonPressed: {
-    transform: [{ scale: 0.9 }],
-  },
-  deleteButtonIcon: {
-    color: "#dc2626",
-    fontSize: 16,
-    fontWeight: "bold",
-  },
   emptyState: {
-    paddingVertical: 40,
-    justifyContent: "center",
+    padding: 24,
     alignItems: "center",
   },
   emptyStateIconContainer: {
-    backgroundColor: "#f3f4f6",
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    justifyContent: "center",
-    alignItems: "center",
     marginBottom: 12,
   },
   emptyStateIcon: {
-    fontSize: 28,
+    fontSize: 32,
   },
   emptyStateText: {
     fontSize: 16,
-    fontWeight: "600",
-    color: "#1f2937",
+    fontWeight: "500",
+    color: "#334155",
     marginBottom: 4,
   },
   emptyStateSubtext: {
     fontSize: 14,
-    color: "#6b7280",
-    textAlign: "center",
-    paddingHorizontal: 40,
+    color: "#64748b",
   },
-
+  tableHeader: {
+    flexDirection: "row",
+    backgroundColor: "#f1f5f9",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  tableHeaderText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#64748b",
+    textTransform: "uppercase",
+  },
+  tableRow: {
+    flexDirection: "row",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9",
+  },
+  tableCell: {
+    flex: 1,
+    justifyContent: "center",
+  },
+  tableCellText: {
+    fontSize: 14,
+    color: "#334155",
+  },
+  stockBadge: {
+    backgroundColor: "#e0f2fe",
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    alignSelf: "flex-start",
+  },
+  stockBadgeText: {
+    color: "#0369a1",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  quantityBadge: {
+    backgroundColor: "#dcfce7",
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    alignSelf: "flex-start",
+  },
+  quantityBadgeText: {
+    color: "#166534",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  deleteButtonPressed: {
+    opacity: 0.6,
+  },
+  deleteButtonIcon: {
+    fontSize: 16,
+  },
   actionButtons: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 24,
-    marginBottom: 10,
-    marginHorizontal: 16,
-    gap: 16,
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  optimizeButton: {
+    flex: 1,
+    backgroundColor: "#3b82f6",
+    borderRadius: 6,
+    padding: 12,
+    marginRight: 8,
+  },
+  optimizeButtonPressed: {
+    backgroundColor: "#2563eb",
+  },
+  buttonDisabled: {
+    backgroundColor: "#9ca3af",
+  },
+  resetButton: {
+    flex: 1,
+    backgroundColor: "#e2e8f0",
+    borderRadius: 6,
+    padding: 12,
+  },
+  resetButtonPressed: {
+    backgroundColor: "#cbd5e1",
   },
   buttonContent: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 8,
   },
-  optimizeButton: {
-    flex: 1,
-    backgroundColor: "#f97316",
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    elevation: 3,
-    shadowColor: "#f97316",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-  },
-  optimizeButtonPressed: {
-    opacity: 0.9,
-    transform: [{ scale: 0.98 }],
-  },
-  buttonDisabled: {
-    backgroundColor: "#9ca3af",
-    shadowColor: "#6b7280",
-    opacity: 0.7,
+  optimizeButtonIcon: {
+    color: "#fff",
+    marginRight: 8,
   },
   optimizeButtonText: {
     color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  optimizeButtonIcon: {
-    fontSize: 18,
-  },
-  resetButton: {
-    flex: 1,
-    backgroundColor: "#fff",
-    paddingVertical: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#e5e7eb",
-    alignItems: "center",
-    paddingBottom: 16,
-    justifyContent: "center",
-  },
-  resetButtonPressed: {
-    backgroundColor: "#f3f4f6",
-    transform: [{ scale: 0.98 }],
-  },
-  resetButtonText: {
-    color: "#4b5563",
-    fontSize: 16,
-    fontWeight: "600",
+    fontWeight: "500",
   },
   resetButtonIcon: {
-    fontSize: 18,
-    color: "#4b5563",
+    marginRight: 8,
+  },
+  resetButtonText: {
+    fontWeight: "500",
+    color: "#334155",
   },
   resultsSection: {
-    marginTop: 24,
-    paddingHorizontal: 16,
+    padding: 16,
   },
   resultsHeader: {
     flexDirection: "row",
@@ -1218,377 +1119,870 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   resultsSectionTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#1f2937",
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#1e293b",
   },
-
   successBadge: {
-    paddingVertical: 10,
-    paddingHorizontal: 24,
     flexDirection: "row",
     alignItems: "center",
-    alignSelf: "center", // Centered button
   },
-  successBadgeText: {
-    // color: "#fff",
-    fontWeight: "bold",
-    fontSize: 16,
-  },
-  shareIcon: {
-    marginRight: 8,
-    fontSize: 16,
-    color: "#fff",
-  },
-
-  statsContainer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 20,
-  },
-  statCard: {
+  summarySection: {
     backgroundColor: "#fff",
-    borderRadius: 12,
+    borderRadius: 8,
     padding: 16,
-    flex: 1,
-    marginHorizontal: 4,
-    alignItems: "center",
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    marginBottom: 16,
   },
-  statNumber: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#f97316",
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#1e293b",
+    marginBottom: 12,
+  },
+  summaryRow: {
+    flexDirection: "row",
+    paddingVertical: 8,
+  },
+  summaryHeader: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
     marginBottom: 4,
   },
-  statLabel: {
-    fontSize: 14,
-    color: "#6b7280",
-  },
-  resultsTable: {
-    backgroundColor: "#fff",
-    borderRadius: 12,
-    overflow: "hidden",
-    elevation: 2,
-    marginHorizontal: 4,
-    marginBottom: 24,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  tableHeaderRow: {
-    flexDirection: "row",
-    backgroundColor: "#f9fafb",
-    paddingVertical: 14,
-    paddingHorizontal: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#e5e7eb",
-  },
-  headerText: {
-    fontWeight: "600",
-    color: "#4b5563",
-    fontSize: 14,
-    textAlign: "center",
+  summaryHeaderText: {
     flex: 1,
-  },
-
-  evenRow: {
-    backgroundColor: "#f9fafb",
-  },
-  quantityBadge: {
-    backgroundColor: "#dbeafe",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-    minWidth: 32,
-  },
-  pipeSizeText: {
-    fontWeight: "600",
-    color: "#1f2937",
-  },
-  cutsContainer: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "center",
-    gap: 6,
-  },
-  cutPill: {
-    backgroundColor: "#e5e7eb",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  cutText: {
     fontSize: 12,
-    fontWeight: "500",
-    color: "#1f2937",
-  },
-
-  quantityText: {
-    color: "#1e40af",
     fontWeight: "600",
-    textAlign: "center",
-  },
-  quantityBadgeText: {
-    color: "#1e40af",
-    fontWeight: "600",
-    textAlign: "center",
-  },
-  wasteText: {
-    fontWeight: "500",
-    color: "#dc2626",
-  },
-  totalRow: {
-    flexDirection: "row",
-    backgroundColor: "#f3f4f6",
-    paddingVertical: 14,
-    paddingHorizontal: 12,
-  },
-  totalText: {
-    fontWeight: "700",
-    color: "#1f2937",
-    textAlign: "center",
-    flex: 1,
-  },
-  safe: {
-    flex: 1,
-    backgroundColor: "#f8fafc",
-  },
-
-  subtitle: {
-    fontSize: 16,
-    color: "#bfdbfe",
-    textAlign: "center",
-    fontWeight: "500",
-  },
-
-  header: {
-    paddingTop: 50,
-    paddingBottom: 25,
-    paddingHorizontal: 20,
-    borderBottomLeftRadius: 25,
-    borderBottomRightRadius: 25,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "800",
-    color: "#fff",
-    textAlign: "center",
-    textShadowColor: "rgba(0,0,0,0.1)",
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 4,
-    letterSpacing: 0.5,
-  },
-
-  scrollView: {
-    flex: 1,
-    marginTop: 20,
-  },
-
-  sectionSubtitle: {
-    fontSize: 16,
     color: "#64748b",
-    marginBottom: 20,
   },
-
-  // Summary Table Styles
-  summaryTable: {
-    borderRadius: 16,
-    overflow: "hidden",
-    shadowRadius: 8,
+  summaryLabel: {
+    flex: 2,
+    fontSize: 14,
+    color: "#334155",
   },
-
-  summaryCell: {
+  summaryValue: {
     flex: 1,
-    alignItems: "center",
-  },
-  summaryCellText: {
     fontSize: 14,
-    fontWeight: "600",
-    textAlign: "center",
+    color: "#334155",
+    fontWeight: "500",
+    textAlign: "right",
   },
-  wasteCellText: {
+  summaryQty: {
+    flex: 1,
     fontSize: 14,
-    fontWeight: "600",
-    color: "#ef4444",
-    textAlign: "center",
+    color: "#334155",
+    textAlign: "right",
   },
-
-  totalCellText: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: "#1e293b",
-    textAlign: "center",
+  summaryTotalRow: {
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
+    marginTop: 8,
+    paddingTop: 12,
   },
-  totalWasteCellText: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: "#ef4444",
-    textAlign: "center",
-  },
-
   metricsGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    justifyContent: "space-between",
+    marginHorizontal: -8,
     marginBottom: 16,
   },
   metricCard: {
-    width: "48%",
-    // backgroundColor: "#fef3c7", // Soft warm background
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 10,
-    borderColor: "#fcd34d",
-    borderWidth: 1,
-  },
-  metricValue: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#f97316",
+    width: "50%",
+    padding: 8,
   },
   metricLabel: {
     fontSize: 12,
-    color: "#6b7280",
+    color: "#64748b",
+    marginBottom: 4,
   },
-
+  metricValue: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#1e293b",
+  },
   layoutCard: {
-    padding: 12,
-    borderWidth: 1,
-    borderColor: "#e5e7eb",
-    borderRadius: 10,
+    backgroundColor: "#fff",
+    borderRadius: 8,
+    padding: 16,
     marginBottom: 16,
-    // backgroundColor: "#fff", // Clean white background
   },
   layoutId: {
-    fontWeight: "bold",
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#1e293b",
     marginBottom: 4,
-    color: "#111827",
   },
   layoutInfo: {
     fontSize: 14,
-    color: "#f97316",
+    color: "#64748b",
+    marginBottom: 12,
+  },
+  sheetVisual: {
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    marginVertical: 12,
+    backgroundColor: "#f8fafc",
+    position: "relative",
+    minHeight: 100,
+  },
+  cutVisual: {
+    position: "absolute",
+    borderWidth: 1,
+    borderColor: "#94a3b8",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  cutVisualText: {
+    fontSize: 10,
+    color: "#1e293b",
+    fontWeight: "500",
+  },
+  cutList: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginTop: 8,
+  },
+  cutListItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginRight: 16,
     marginBottom: 8,
   },
-
-  cutRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 2,
-  },
-  cutLabel: {
+  cutListSize: {
     fontSize: 14,
-    color: "#374151",
+    color: "#334155",
+    marginRight: 4,
   },
-  cutQty: {
-    fontWeight: "600",
-    color: "#f97316", // Orange emphasis
-  },
-
-  cutBar: {
-    flexDirection: "row",
-    marginVertical: 8,
-    flexWrap: "wrap",
-  },
-  cutBlock: {
-    backgroundColor: "#f97316", // Highlight color
-    paddingVertical: 4,
-    paddingHorizontal: 6,
-    borderRadius: 4,
-    margin: 2,
-  },
-  cutBlockText: {
+  cutListQty: {
     fontSize: 12,
-    color: "#fff",
+    color: "#64748b",
   },
-
   layoutFooter: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginTop: 8,
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
   },
   footerText: {
     fontSize: 12,
-    color: "#6b7280",
-  },
-
-  summarySection: {
-    marginBottom: 16,
-    padding: 10,
-    backgroundColor: "#fff",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#e5e7eb",
-  },
-
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#111827",
-    marginBottom: 8,
-  },
-
-  summaryHeader: {
-    flexDirection: "row",
-    paddingVertical: 6,
-    backgroundColor: "#f9fafb",
-    borderBottomWidth: 1,
-  },
-
-  summaryHeaderText: {
-    width: "33.33%",
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#6b7280",
-    textAlign: "center",
-  },
-
-  summaryRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 6,
-    borderColor: "#f3f4f6",
-  },
-
-  summaryLabel: {
-    width: "33.33%",
-    fontSize: 14,
-    color: "#374151",
-    textAlign: "left",
-    paddingLeft: 4,
-  },
-
-  summaryValue: {
-    width: "33.33%",
-    fontSize: 14,
-    color: "#111827",
-    textAlign: "center",
-  },
-
-  summaryQty: {
-    width: "33.33%",
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#f97316",
-    textAlign: "right",
-    paddingRight: 4,
-  },
-
-  summaryTotalRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    borderTopWidth: 1,
-    borderColor: "#e5e7eb",
-    marginTop: 6,
-    paddingTop: 8,
+    color: "#64748b",
   },
 });
+// const styles = StyleSheet.create({
+//   headerContainer: {
+//     paddingBottom: 15,
+//   },
+//   headerBackground: {
+//     backgroundColor: "#f8f9fa",
+//     paddingTop: 60,
+//     paddingBottom: 30,
+//     borderBottomLeftRadius: 25,
+//     borderBottomRightRadius: 25,
+//     overflow: "hidden",
+//     position: "relative",
+//     alignItems: "center",
+//     justifyContent: "center",
+//   },
+//   logo: {
+//     width: 300,
+//     height: 40,
+//   },
+//   sharelogo: {
+//     width: 50,
+//     height: 40,
+//     backgroundColor: "#f8f9fa",
+//   },
+
+//   titleContainer: {
+//     alignItems: "center",
+//     position: "relative",
+//     zIndex: 2,
+//   },
+//   titleMain: {},
+
+//   tabContainer: {
+//     flexDirection: "row",
+//     backgroundColor: "#fff",
+//     marginHorizontal: 20,
+//     marginTop: -20,
+//     borderRadius: 15,
+//     elevation: 8,
+//     shadowColor: "#f97316",
+//     shadowOffset: { width: 0, height: 4 },
+//     shadowOpacity: 0.15,
+//     shadowRadius: 10,
+//     overflow: "hidden",
+//   },
+//   tab: {
+//     flex: 1,
+//     paddingVertical: 16,
+//     alignItems: "center",
+//     backgroundColor: "transparent",
+//     position: "relative",
+//   },
+//   tabActive: {
+//     backgroundColor: "#f97316",
+//   },
+//   tabPressed: {
+//     opacity: 0.8,
+//     transform: [{ scale: 0.98 }],
+//   },
+//   tabContent: {
+//     alignItems: "center",
+//     flexDirection: "row",
+//     gap: 8,
+//   },
+//   tabIcon: {
+//     marginBottom: 2,
+//   },
+//   tabtext: {
+//     color: "#f97316",
+//     fontSize: 14,
+//     fontWeight: "600",
+//     letterSpacing: 0.3,
+//   },
+//   tabtextActive: {
+//     color: "#fff",
+//     fontWeight: "700",
+//   },
+//   activeIndicator: {
+//     position: "absolute",
+//     bottom: 0,
+//     width: "40%",
+//     height: 3,
+//     backgroundColor: "#fff",
+//     borderRadius: 2,
+//   },
+//   section: {
+//     marginTop: 20,
+//     paddingHorizontal: 16,
+//   },
+//   inputCard: {
+//     backgroundColor: "#fff",
+//     borderRadius: 12,
+//     padding: 16,
+//     marginBottom: 20,
+//     shadowColor: "#000",
+//     shadowOffset: { width: 0, height: 2 },
+//     shadowOpacity: 0.05,
+//     shadowRadius: 8,
+//     elevation: 2,
+//   },
+//   inputRow: {
+//     flexDirection: "row",
+//     gap: 12,
+//     marginBottom: 16,
+//   },
+//   inputGroup: {
+//     flex: 1,
+//   },
+//   inputLabel: {
+//     fontSize: 14,
+//     fontWeight: "600",
+//     color: "#4b5563",
+//     marginBottom: 6,
+//   },
+//   inputWrapper: {
+//     flexDirection: "row",
+//     alignItems: "center",
+//     // borderWidth: 1,
+//     // borderColor: "#e5e7eb",
+//     // borderRadius: 8,
+//     overflow: "hidden",
+//   },
+//   input: {
+//     flex: 1,
+//     paddingVertical: 10,
+//     paddingHorizontal: 12,
+//     fontSize: 16,
+//     borderWidth: 1,
+//     borderColor: "#e5e7eb",
+//     borderRadius: 8,
+//     color: "#1f2937",
+//     backgroundColor: "#f9fafb",
+//   },
+//   inputUnit: {
+//     paddingHorizontal: 12,
+//     fontSize: 14,
+//     color: "#6b7280",
+//     backgroundColor: "#f3f4f6",
+//   },
+//   addButton: {
+//     backgroundColor: "#f97316",
+//     borderRadius: 8,
+//     paddingVertical: 12,
+//   },
+//   addButtonPressed: {
+//     opacity: 0.9,
+//     transform: [{ scale: 0.98 }],
+//   },
+//   addButtonContent: {
+//     flexDirection: "row",
+//     justifyContent: "center",
+//     alignItems: "center",
+//     gap: 8,
+//   },
+//   addButtonIcon: {
+//     color: "#fff",
+//     fontSize: 18,
+//     fontWeight: "bold",
+//   },
+//   addButtonText: {
+//     color: "#fff",
+//     fontSize: 16,
+//     fontWeight: "600",
+//   },
+//   tableContainer: {
+//     backgroundColor: "#fff",
+//     borderRadius: 12,
+//     overflow: "hidden",
+//     shadowColor: "#000",
+//     shadowOffset: { width: 0, height: 2 },
+//     shadowOpacity: 0.05,
+//     shadowRadius: 8,
+//     elevation: 2,
+//   },
+//   tableHeader: {
+//     flexDirection: "row",
+//     backgroundColor: "#f9fafb",
+//     paddingVertical: 12,
+//     borderBottomWidth: 1,
+//     borderBottomColor: "#e5e7eb",
+//   },
+//   tableHeaderText: {
+//     flex: 1,
+//     textAlign: "center",
+//     fontWeight: "600",
+//     color: "#4b5563",
+//     fontSize: 14,
+//   },
+//   tableRow: {
+//     flexDirection: "row",
+//     paddingVertical: 14,
+//     borderBottomWidth: 1,
+//     borderBottomColor: "#f3f4f6",
+//   },
+//   tableCell: {
+//     flex: 1,
+//     justifyContent: "center",
+//     alignItems: "center",
+//   },
+//   tableCellText: {
+//     fontSize: 15,
+//     color: "#1f2937",
+//     fontWeight: "500",
+//   },
+//   stockBadge: {
+//     backgroundColor: "#d1fae5",
+//     paddingHorizontal: 10,
+//     paddingVertical: 4,
+//     borderRadius: 12,
+//     minWidth: 40,
+//   },
+//   lowStockBadge: {
+//     backgroundColor: "#fee2e2",
+//   },
+//   stockBadgeText: {
+//     color: "#065f46",
+//     fontWeight: "600",
+//     textAlign: "center",
+//   },
+//   deleteButton: {
+//     backgroundColor: "#fee2e2",
+//     width: 32,
+//     height: 32,
+//     borderRadius: 16,
+//     justifyContent: "center",
+//     alignItems: "center",
+//   },
+//   deleteButtonPressed: {
+//     transform: [{ scale: 0.9 }],
+//   },
+//   deleteButtonIcon: {
+//     color: "#dc2626",
+//     fontSize: 16,
+//     fontWeight: "bold",
+//   },
+//   emptyState: {
+//     paddingVertical: 40,
+//     justifyContent: "center",
+//     alignItems: "center",
+//   },
+//   emptyStateIconContainer: {
+//     backgroundColor: "#f3f4f6",
+//     width: 60,
+//     height: 60,
+//     borderRadius: 30,
+//     justifyContent: "center",
+//     alignItems: "center",
+//     marginBottom: 12,
+//   },
+//   emptyStateIcon: {
+//     fontSize: 28,
+//   },
+//   emptyStateText: {
+//     fontSize: 16,
+//     fontWeight: "600",
+//     color: "#1f2937",
+//     marginBottom: 4,
+//   },
+//   emptyStateSubtext: {
+//     fontSize: 14,
+//     color: "#6b7280",
+//     textAlign: "center",
+//     paddingHorizontal: 40,
+//   },
+
+//   actionButtons: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     marginTop: 24,
+//     marginBottom: 10,
+//     marginHorizontal: 16,
+//     gap: 16,
+//   },
+//   buttonContent: {
+//     flexDirection: "row",
+//     alignItems: "center",
+//     justifyContent: "center",
+//     gap: 8,
+//   },
+//   optimizeButton: {
+//     flex: 1,
+//     backgroundColor: "#f97316",
+//     paddingVertical: 16,
+//     borderRadius: 12,
+//     alignItems: "center",
+//     justifyContent: "center",
+//     elevation: 3,
+//     shadowColor: "#f97316",
+//     shadowOffset: { width: 0, height: 2 },
+//     shadowOpacity: 0.3,
+//     shadowRadius: 4,
+//   },
+//   optimizeButtonPressed: {
+//     opacity: 0.9,
+//     transform: [{ scale: 0.98 }],
+//   },
+//   buttonDisabled: {
+//     backgroundColor: "#9ca3af",
+//     shadowColor: "#6b7280",
+//     opacity: 0.7,
+//   },
+//   optimizeButtonText: {
+//     color: "#fff",
+//     fontSize: 16,
+//     fontWeight: "600",
+//   },
+//   optimizeButtonIcon: {
+//     fontSize: 18,
+//   },
+//   resetButton: {
+//     flex: 1,
+//     backgroundColor: "#fff",
+//     paddingVertical: 16,
+//     borderRadius: 12,
+//     borderWidth: 1,
+//     borderColor: "#e5e7eb",
+//     alignItems: "center",
+//     paddingBottom: 16,
+//     justifyContent: "center",
+//   },
+//   resetButtonPressed: {
+//     backgroundColor: "#f3f4f6",
+//     transform: [{ scale: 0.98 }],
+//   },
+//   resetButtonText: {
+//     color: "#4b5563",
+//     fontSize: 16,
+//     fontWeight: "600",
+//   },
+//   resetButtonIcon: {
+//     fontSize: 18,
+//     color: "#4b5563",
+//   },
+//   resultsSection: {
+//     marginTop: 24,
+//     paddingHorizontal: 16,
+//   },
+//   resultsHeader: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     alignItems: "center",
+//     marginBottom: 16,
+//   },
+//   resultsSectionTitle: {
+//     fontSize: 20,
+//     fontWeight: "700",
+//     color: "#1f2937",
+//   },
+
+//   successBadge: {
+//     paddingVertical: 10,
+//     paddingHorizontal: 24,
+//     flexDirection: "row",
+//     alignItems: "center",
+//     alignSelf: "center", // Centered button
+//   },
+//   successBadgeText: {
+//     // color: "#fff",
+//     fontWeight: "bold",
+//     fontSize: 16,
+//   },
+//   shareIcon: {
+//     marginRight: 8,
+//     fontSize: 16,
+//     color: "#fff",
+//   },
+
+//   statsContainer: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     marginBottom: 20,
+//   },
+//   statCard: {
+//     backgroundColor: "#fff",
+//     borderRadius: 12,
+//     padding: 16,
+//     flex: 1,
+//     marginHorizontal: 4,
+//     alignItems: "center",
+//     elevation: 2,
+//     shadowColor: "#000",
+//     shadowOffset: { width: 0, height: 2 },
+//     shadowOpacity: 0.1,
+//     shadowRadius: 4,
+//   },
+//   statNumber: {
+//     fontSize: 20,
+//     fontWeight: "700",
+//     color: "#f97316",
+//     marginBottom: 4,
+//   },
+//   statLabel: {
+//     fontSize: 14,
+//     color: "#6b7280",
+//   },
+//   resultsTable: {
+//     backgroundColor: "#fff",
+//     borderRadius: 12,
+//     overflow: "hidden",
+//     elevation: 2,
+//     marginHorizontal: 4,
+//     marginBottom: 24,
+//     shadowColor: "#000",
+//     shadowOffset: { width: 0, height: 2 },
+//     shadowOpacity: 0.1,
+//     shadowRadius: 4,
+//   },
+//   tableHeaderRow: {
+//     flexDirection: "row",
+//     backgroundColor: "#f9fafb",
+//     paddingVertical: 14,
+//     paddingHorizontal: 12,
+//     borderBottomWidth: 1,
+//     borderBottomColor: "#e5e7eb",
+//   },
+//   headerText: {
+//     fontWeight: "600",
+//     color: "#4b5563",
+//     fontSize: 14,
+//     textAlign: "center",
+//     flex: 1,
+//   },
+
+//   evenRow: {
+//     backgroundColor: "#f9fafb",
+//   },
+//   quantityBadge: {
+//     backgroundColor: "#dbeafe",
+//     paddingHorizontal: 10,
+//     paddingVertical: 4,
+//     borderRadius: 12,
+//     minWidth: 32,
+//   },
+//   pipeSizeText: {
+//     fontWeight: "600",
+//     color: "#1f2937",
+//   },
+//   cutsContainer: {
+//     flexDirection: "row",
+//     flexWrap: "wrap",
+//     justifyContent: "center",
+//     gap: 6,
+//   },
+//   cutPill: {
+//     backgroundColor: "#e5e7eb",
+//     paddingHorizontal: 8,
+//     paddingVertical: 4,
+//     borderRadius: 12,
+//   },
+//   cutText: {
+//     fontSize: 12,
+//     fontWeight: "500",
+//     color: "#1f2937",
+//   },
+
+//   quantityText: {
+//     color: "#1e40af",
+//     fontWeight: "600",
+//     textAlign: "center",
+//   },
+//   quantityBadgeText: {
+//     color: "#1e40af",
+//     fontWeight: "600",
+//     textAlign: "center",
+//   },
+//   wasteText: {
+//     fontWeight: "500",
+//     color: "#dc2626",
+//   },
+//   totalRow: {
+//     flexDirection: "row",
+//     backgroundColor: "#f3f4f6",
+//     paddingVertical: 14,
+//     paddingHorizontal: 12,
+//   },
+//   totalText: {
+//     fontWeight: "700",
+//     color: "#1f2937",
+//     textAlign: "center",
+//     flex: 1,
+//   },
+//   safe: {
+//     flex: 1,
+//     backgroundColor: "#f8fafc",
+//   },
+
+//   subtitle: {
+//     fontSize: 16,
+//     color: "#bfdbfe",
+//     textAlign: "center",
+//     fontWeight: "500",
+//   },
+
+//   header: {
+//     paddingTop: 50,
+//     paddingBottom: 25,
+//     paddingHorizontal: 20,
+//     borderBottomLeftRadius: 25,
+//     borderBottomRightRadius: 25,
+//     shadowColor: "#000",
+//     shadowOffset: { width: 0, height: 4 },
+//     shadowOpacity: 0.1,
+//     shadowRadius: 10,
+//   },
+//   title: {
+//     fontSize: 28,
+//     fontWeight: "800",
+//     color: "#fff",
+//     textAlign: "center",
+//     textShadowColor: "rgba(0,0,0,0.1)",
+//     textShadowOffset: { width: 0, height: 2 },
+//     textShadowRadius: 4,
+//     letterSpacing: 0.5,
+//   },
+
+//   scrollView: {
+//     flex: 1,
+//     marginTop: 20,
+//   },
+
+//   sectionSubtitle: {
+//     fontSize: 16,
+//     color: "#64748b",
+//     marginBottom: 20,
+//   },
+
+//   // Summary Table Styles
+//   summaryTable: {
+//     borderRadius: 16,
+//     overflow: "hidden",
+//     shadowRadius: 8,
+//   },
+
+//   summaryCell: {
+//     flex: 1,
+//     alignItems: "center",
+//   },
+//   summaryCellText: {
+//     fontSize: 14,
+//     fontWeight: "600",
+//     textAlign: "center",
+//   },
+//   wasteCellText: {
+//     fontSize: 14,
+//     fontWeight: "600",
+//     color: "#ef4444",
+//     textAlign: "center",
+//   },
+
+//   totalCellText: {
+//     fontSize: 16,
+//     fontWeight: "800",
+//     color: "#1e293b",
+//     textAlign: "center",
+//   },
+//   totalWasteCellText: {
+//     fontSize: 16,
+//     fontWeight: "800",
+//     color: "#ef4444",
+//     textAlign: "center",
+//   },
+
+//   metricsGrid: {
+//     flexDirection: "row",
+//     flexWrap: "wrap",
+//     justifyContent: "space-between",
+//     marginBottom: 16,
+//   },
+//   metricCard: {
+//     width: "48%",
+//     // backgroundColor: "#fef3c7", // Soft warm background
+//     padding: 12,
+//     borderRadius: 10,
+//     marginBottom: 10,
+//     borderColor: "#fcd34d",
+//     borderWidth: 1,
+//   },
+//   metricValue: {
+//     fontSize: 16,
+//     fontWeight: "700",
+//     color: "#f97316",
+//   },
+//   metricLabel: {
+//     fontSize: 12,
+//     color: "#6b7280",
+//   },
+
+//   layoutCard: {
+//     padding: 12,
+//     borderWidth: 1,
+//     borderColor: "#e5e7eb",
+//     borderRadius: 10,
+//     marginBottom: 16,
+//     // backgroundColor: "#fff", // Clean white background
+//   },
+//   layoutId: {
+//     fontWeight: "bold",
+//     marginBottom: 4,
+//     color: "#111827",
+//   },
+//   layoutInfo: {
+//     fontSize: 14,
+//     color: "#f97316",
+//     marginBottom: 8,
+//   },
+
+//   cutRow: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     paddingVertical: 2,
+//   },
+//   cutLabel: {
+//     fontSize: 14,
+//     color: "#374151",
+//   },
+//   cutQty: {
+//     fontWeight: "600",
+//     color: "#f97316", // Orange emphasis
+//   },
+
+//   cutBar: {
+//     flexDirection: "row",
+//     marginVertical: 8,
+//     flexWrap: "wrap",
+//   },
+//   cutBlock: {
+//     backgroundColor: "#f97316", // Highlight color
+//     paddingVertical: 4,
+//     paddingHorizontal: 6,
+//     borderRadius: 4,
+//     margin: 2,
+//   },
+//   cutBlockText: {
+//     fontSize: 12,
+//     color: "#fff",
+//   },
+
+//   layoutFooter: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     marginTop: 8,
+//   },
+//   footerText: {
+//     fontSize: 12,
+//     color: "#6b7280",
+//   },
+
+//   summarySection: {
+//     marginBottom: 16,
+//     padding: 10,
+//     backgroundColor: "#fff",
+//     borderRadius: 8,
+//     borderWidth: 1,
+//     borderColor: "#e5e7eb",
+//   },
+
+//   sectionTitle: {
+//     fontSize: 16,
+//     fontWeight: "700",
+//     color: "#111827",
+//     marginBottom: 8,
+//   },
+
+//   summaryHeader: {
+//     flexDirection: "row",
+//     paddingVertical: 6,
+//     backgroundColor: "#f9fafb",
+//     borderBottomWidth: 1,
+//   },
+
+//   summaryHeaderText: {
+//     width: "33.33%",
+//     fontSize: 14,
+//     fontWeight: "600",
+//     color: "#6b7280",
+//     textAlign: "center",
+//   },
+
+//   summaryRow: {
+//     flexDirection: "row",
+//     alignItems: "center",
+//     paddingVertical: 6,
+//     borderColor: "#f3f4f6",
+//   },
+
+//   summaryLabel: {
+//     width: "33.33%",
+//     fontSize: 14,
+//     color: "#374151",
+//     textAlign: "left",
+//     paddingLeft: 4,
+//   },
+
+//   summaryValue: {
+//     width: "33.33%",
+//     fontSize: 14,
+//     color: "#111827",
+//     textAlign: "center",
+//   },
+
+//   summaryQty: {
+//     width: "33.33%",
+//     fontSize: 14,
+//     fontWeight: "600",
+//     color: "#f97316",
+//     textAlign: "right",
+//     paddingRight: 4,
+//   },
+
+//   summaryTotalRow: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     borderTopWidth: 1,
+//     borderColor: "#e5e7eb",
+//     marginTop: 6,
+//     paddingTop: 8,
+//   },
+// });
