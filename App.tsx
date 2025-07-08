@@ -742,7 +742,14 @@ export default function PipeOptimizer() {
                 </View>
               </TouchableOpacity>
             </View>
-            <View ref={viewRef} collapsable={false}>
+            <View
+              ref={viewRef}
+              collapsable={false}
+              style={{
+                backgroundColor: "#f8fafc", // Your app's background color
+                padding: 10,
+              }}
+            >
               {/* Stats Cards Row */}
               <View style={styles.summarySection}>
                 <Text style={styles.sectionTitle}>Required Stocks</Text>
@@ -1563,7 +1570,7 @@ const styles = StyleSheet.create({
     width: "33.33%",
     fontSize: 14,
     color: "#374151",
-    textAlign: "left",
+    textAlign: "center",
     paddingLeft: 4,
   },
 
@@ -1579,7 +1586,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     color: "#f97316",
-    textAlign: "right",
+    textAlign: "center",
     paddingRight: 4,
   },
 
