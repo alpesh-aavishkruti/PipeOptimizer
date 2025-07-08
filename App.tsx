@@ -18,7 +18,9 @@ export default function App() {
   return (
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
+        
         <Stack.Screen name="Main">
+          
           {({ navigation }) => (
             <View style={styles.container}>
               <StatusBar barStyle="light-content" backgroundColor="#FF6B00" />
@@ -28,14 +30,14 @@ export default function App() {
                 style={styles.card}
                 onPress={() => navigation.navigate("TwoD")}
               >
-                <Text style={styles.cardText}>2D Optimizer</Text>
+                <Text style={styles.cardText}>1D Optimizer</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.card}
                 onPress={() => navigation.navigate("ThreeD")}
               >
-                <Text style={styles.cardText}>3D Optimizer</Text>
+                <Text style={styles.cardText}>2D Optimizer</Text>
               </TouchableOpacity>
             </View>
           )}

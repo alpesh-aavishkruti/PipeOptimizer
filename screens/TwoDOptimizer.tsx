@@ -15,9 +15,7 @@ import {
   TouchableOpacity,
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
-import { MaterialIcons } from "@expo/vector-icons"; // ✅ Expo built-in
-
-
+import { MaterialIcons } from "@expo/vector-icons";
 import { captureRef } from "react-native-view-shot";
 import * as Sharing from "expo-sharing";
 // Define types
@@ -220,16 +218,14 @@ const solveCuttingStock = (
   return solution;
 };
 
-export default function TwoDOptimizer({navigation}:any) {
+export default function TwoDOptimizer({ navigation }: any) {
   const [orderPieces, setOrderPieces] = useState<OrderPiece[]>([]);
   const [lengthInput, setLengthInput] = useState<string>("");
   const [pipeSizeInput, setPipeSizeInput] = useState<string>("");
   const [stockInput, setStockInput] = useState<string>("");
   const [quantityInput, setQuantityInput] = useState<string>("");
   const [activeTab, setActiveTab] = useState<"pipes" | "calculator">("pipes");
-
   const [availablePipes, setAvailablePipes] = useState<Pipe[]>([]);
-
   const [optimized, setOptimized] = useState<OptimizedPipe[]>([]);
   const [totalPiecesNeeded, setTotalPiecesNeeded] = useState(0);
   const [totalPiecesCut, setTotalPiecesCut] = useState(0);
@@ -289,7 +285,6 @@ export default function TwoDOptimizer({navigation}:any) {
       demandList.push({ length: Number(length), quantity });
     });
 
-    // Create a copy of available pipes to avoid modifying original
     const pipesCopy = availablePipes.map((pipe) => ({ ...pipe }));
     const optimizedResult = solveCuttingStock(pipesCopy, demandList);
     setOptimized(optimizedResult);
@@ -1616,12 +1611,12 @@ const styles = StyleSheet.create({
   // Footer Styles
   footerContainer: {
     position: "absolute",
-    bottom: 0,
+    bottom: -200,
     left: 0,
     right: 0,
     paddingVertical: 15,
     paddingHorizontal: 20,
-  
+
     shadowOpacity: 0.1,
     shadowRadius: 3,
   },
