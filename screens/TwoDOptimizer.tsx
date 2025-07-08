@@ -868,17 +868,6 @@ export default function TwoDOptimizer({ navigation }: any) {
             </View>
           </View>
         )}
-
-        <View style={styles.footerContainer}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.backButtonIcon}>←</Text>
-            <Text style={styles.backButtonText}>Go Back</Text>
-          </TouchableOpacity>
-        </View>
       </ScrollView>
     </SafeAreaView>
   );
