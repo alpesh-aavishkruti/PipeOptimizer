@@ -18,16 +18,19 @@
     "javascript-lp-solver": "^0.4.24",
     "react": "19.0.0",
     "react-native": "0.79.4",
+    "react-native-dotenv": "^3.4.11",
     "react-native-gesture-handler": "~2.24.0",
     "react-native-reanimated": "~3.17.4",
     "react-native-safe-area-context": "5.4.0",
     "react-native-screens": "~4.11.1",
     "react-native-svg": "15.11.2",
     "react-native-vector-icons": "^10.2.0",
-    "react-native-view-shot": "4.0.3"
+    "react-native-view-shot": "4.0.3",
+    "expo-constants": "~17.1.7"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "@react-native-community/cli": "^19.1.0",
     "@types/react": "~19.0.10",
     "patch-package": "^8.0.0",
     "typescript": "~5.8.3"

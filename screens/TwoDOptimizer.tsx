@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import React, { useEffect, useRef, useState } from "react";
+import Constants from "expo-constants";
 
 import {
   View,
@@ -13,13 +14,16 @@ import {
   Keyboard,
   Image,
   TouchableOpacity,
+  Alert,
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import { MaterialIcons } from "@expo/vector-icons";
 import { captureRef } from "react-native-view-shot";
 import * as Sharing from "expo-sharing";
+
 // Define types
 type Pipe = {
+  quantity: number;
   size: number;
   stock: number;
 };
@@ -37,187 +41,6 @@ type OptimizedPipe = {
   efficiency: number;
 };
 
-type Demand = {
-  length: number;
-  quantity: number;
-};
-
-const solveCuttingStock = (
-  availablePipes: Pipe[],
-  demandList: Demand[]
-): OptimizedPipe[] => {
-  const remainingDemand = demandList.reduce((acc, d) => {
-    acc[d.length] = d.quantity;
-    return acc;
-  }, {} as Record<number, number>);
-
-  const solution: OptimizedPipe[] = [];
-
-  const generateCuttingPatterns = (
-    pipeSize: number,
-    demands: Record<number, number>
-  ) => {
-    const lengths = Object.keys(demands)
-      .map(Number)
-      .sort((a, b) => b - a);
-    const patterns: Array<{
-      cuts: number[];
-      waste: number;
-      efficiency: number;
-    }> = [];
-
-    const generatePattern = (
-      remaining: number,
-      currentCuts: number[],
-      lengthIndex: number
-    ) => {
-      if (lengthIndex >= lengths.length) {
-        if (currentCuts.length > 0) {
-          const usedLength = currentCuts.reduce((sum, cut) => sum + cut, 0);
-          const waste = remaining;
-          const efficiency = (usedLength / pipeSize) * 100;
-
-          if (efficiency >= 70) {
-            patterns.push({
-              cuts: [...currentCuts],
-              waste,
-              efficiency,
-            });
-          }
-        }
-        return;
-      }
-
-      const currentLength = lengths[lengthIndex];
-      const maxPieces = Math.min(
-        Math.floor(remaining / currentLength),
-        demands[currentLength] || 0
-      );
-
-      for (let qty = 0; qty <= maxPieces; qty++) {
-        const newCuts = [...currentCuts, ...Array(qty).fill(currentLength)];
-        const newRemaining = remaining - qty * currentLength;
-        generatePattern(newRemaining, newCuts, lengthIndex + 1);
-      }
-    };
-
-    generatePattern(pipeSize, [], 0);
-
-    return patterns.sort((a, b) => {
-      if (Math.abs(a.efficiency - b.efficiency) < 0.1) {
-        return a.waste - b.waste;
-      }
-      return b.efficiency - a.efficiency;
-    });
-  };
-
-  // Main optimization loop
-  while (Object.values(remainingDemand).some((qty) => qty > 0)) {
-    let bestPattern = null;
-    let bestPipeSize = 0;
-    let bestScore = -1;
-
-    for (const pipe of availablePipes) {
-      if (pipe.stock <= 0) continue;
-
-      const patterns = generateCuttingPatterns(pipe.size, remainingDemand);
-
-      for (const pattern of patterns) {
-        const canUse = pattern.cuts.every((length) => {
-          const needed = pattern.cuts.filter((cut) => cut === length).length;
-          return (remainingDemand[length] || 0) >= needed;
-        });
-
-        if (canUse) {
-          const demandSatisfied = pattern.cuts.reduce((score, length) => {
-            return score + (remainingDemand[length] || 0);
-          }, 0);
-
-          const score = pattern.efficiency + demandSatisfied * 10;
-
-          if (score > bestScore) {
-            bestScore = score;
-            bestPattern = pattern;
-            bestPipeSize = pipe.size;
-          }
-          break;
-        }
-      }
-    }
-
-    if (!bestPattern) {
-      const sortedLengths = Object.keys(remainingDemand)
-        .map(Number)
-        .filter((length) => remainingDemand[length] > 0)
-        .sort((a, b) => b - a);
-
-      if (sortedLengths.length === 0) break;
-
-      const largestPiece = sortedLengths[0];
-      const suitablePipe = availablePipes
-        .filter((pipe) => pipe.size >= largestPiece && pipe.stock > 0)
-        .sort((a, b) => a.size - b.size)[0];
-
-      if (suitablePipe) {
-        const cuts: number[] = [];
-        let remaining = suitablePipe.size;
-
-        for (const length of sortedLengths) {
-          while (remaining >= length && remainingDemand[length] > 0) {
-            cuts.push(length);
-            remaining -= length;
-            remainingDemand[length]--;
-          }
-        }
-
-        const usedLength = cuts.reduce((sum, cut) => sum + cut, 0);
-        bestPattern = {
-          cuts,
-          waste: remaining,
-          efficiency: (usedLength / suitablePipe.size) * 100,
-        };
-        bestPipeSize = suitablePipe.size;
-      } else {
-        break;
-      }
-    }
-
-    if (bestPattern) {
-      bestPattern.cuts.forEach((length) => {
-        remainingDemand[length] = Math.max(0, remainingDemand[length] - 1);
-      });
-
-      const pipeIndex = availablePipes.findIndex(
-        (p) => p.size === bestPipeSize
-      );
-      if (pipeIndex >= 0) {
-        availablePipes[pipeIndex].stock--;
-      }
-
-      const existingIndex = solution.findIndex(
-        (s) =>
-          s.pipeSize === bestPipeSize &&
-          JSON.stringify(s.cuts.sort()) ===
-            JSON.stringify(bestPattern.cuts.sort())
-      );
-
-      if (existingIndex >= 0) {
-        solution[existingIndex].count++;
-      } else {
-        solution.push({
-          pipeSize: bestPipeSize,
-          remaining: bestPattern.waste,
-          cuts: bestPattern.cuts,
-          count: 1,
-          efficiency: bestPattern.efficiency,
-        });
-      }
-    }
-  }
-
-  return solution;
-};
-
 export default function TwoDOptimizer({ navigation }: any) {
   const [orderPieces, setOrderPieces] = useState<OrderPiece[]>([]);
   const [lengthInput, setLengthInput] = useState<string>("");
@@ -229,7 +52,11 @@ export default function TwoDOptimizer({ navigation }: any) {
   const [optimized, setOptimized] = useState<OptimizedPipe[]>([]);
   const [totalPiecesNeeded, setTotalPiecesNeeded] = useState(0);
   const [totalPiecesCut, setTotalPiecesCut] = useState(0);
-  const [uncutCount, setUncutCount] = useState(0); // Add this in your component state
+  const [uncutCount, setUncutCount] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [rawOptimizationData, setRawOptimizationData] = useState(null);
+  const API_BASE_URL = Constants.expoConfig?.extra?.API_BASE_URL ?? "";
+  const API_KEY = Constants.expoConfig?.extra?.API_KEY ?? "";
 
   const flattenPieces = (): number[] => {
     const pieces: number[] = [];
@@ -271,35 +98,83 @@ export default function TwoDOptimizer({ navigation }: any) {
     savePipes();
   }, [availablePipes]);
 
-  const optimizePipes = () => {
+  const optimizePipes = async () => {
     const pieces = flattenPieces();
     if (pieces.length === 0) return;
 
-    const demandList: Demand[] = [];
-    const pieceCounts = pieces.reduce((acc, p) => {
-      acc[p] = (acc[p] || 0) + 1;
-      return acc;
-    }, {} as Record<number, number>);
+    setIsLoading(true);
 
-    Object.entries(pieceCounts).forEach(([length, quantity]) => {
-      demandList.push({ length: Number(length), quantity });
-    });
+    try {
+      const requestData = {
+        quantities: orderPieces.map((piece) => piece.quantity),
+        widths: orderPieces.map((piece) => piece.length),
+        parent_widths: availablePipes.map((pipe) => pipe.size).filter(Boolean),
+        parent_quantities: availablePipes.map((pipe) => pipe.stock ?? 1),
+      };
 
-    const pipesCopy = availablePipes.map((pipe) => ({ ...pipe }));
-    const optimizedResult = solveCuttingStock(pipesCopy, demandList);
-    setOptimized(optimizedResult);
+      console.log("API Request Data:", requestData);
 
-    // Calculate totals
-    const totalNeeded = pieces.length;
-    const totalCut = optimizedResult.reduce((sum, opt) => {
-      return sum + opt.cuts.length * opt.count;
-    }, 0);
+      const response = await fetch(
+        `${API_BASE_URL}/api/calcuta/1d-optimization/`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": API_KEY,
+          },
+          body: JSON.stringify(requestData),
+        }
+      );
 
-    setTotalPiecesNeeded(totalNeeded);
-    setTotalPiecesCut(totalCut);
-    setUncutCount(totalNeeded - totalCut);
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      setRawOptimizationData(data);
+      console.log("API Response Data:", data);
+
+      let optimizedResult: OptimizedPipe[] = [];
+      console.log(data, "datata");
+      if (
+        data &&
+        typeof data === "object" &&
+        Array.isArray(data.cutting_patterns)
+      ) {
+        optimizedResult = data.cutting_patterns.map((pattern: any) => ({
+          pipeSize: pattern.parent_width,
+          remaining: pattern.waste_per_roll || 0,
+          cuts: pattern.cuts || pattern.cut_widths || [],
+          count: pattern.usage || 1,
+          efficiency:
+            ((pattern.parent_width - (pattern.waste_per_roll || 0)) /
+              pattern.parent_width) *
+            100,
+        }));
+      } else {
+        console.error("Unexpected API response format:", data);
+        throw new Error("Invalid API response format");
+      }
+
+      setOptimized(optimizedResult);
+
+      const totalNeeded = requestData.quantities.reduce(
+        (sum, qty) => sum + qty,
+        0
+      );
+      const totalCut = optimizedResult.reduce((sum, opt) => {
+        return sum + (opt.cuts?.length || 0) * opt.count;
+      }, 0);
+
+      setTotalPiecesNeeded(totalNeeded);
+      setTotalPiecesCut(totalCut);
+      setUncutCount(totalNeeded - totalCut);
+    } catch (error) {
+      console.error("API Error:", error);
+    } finally {
+      setIsLoading(false);
+    }
   };
-
   const resetAll = (): void => {
     setOrderPieces([]);
     setLengthInput("");
@@ -319,14 +194,16 @@ export default function TwoDOptimizer({ navigation }: any) {
   const removeOrderPiece = (indexToRemove: number): void => {
     setOrderPieces(orderPieces.filter((_, index) => index !== indexToRemove));
   };
+
   const viewRef = useRef();
 
-  const getCutCounts = (cuts) => {
-    return cuts.reduce((acc, cut) => {
+  const getCutCounts = (cuts: any) => {
+    return cuts.reduce((acc: any, cut: any) => {
       acc[cut] = (acc[cut] || 0) + 1;
       return acc;
     }, {});
   };
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" backgroundColor="#1a365d" />
@@ -336,7 +213,6 @@ export default function TwoDOptimizer({ navigation }: any) {
         <View style={styles.headerBackground}>
           {/* Decorative elements */}
 
-          {/* Main title with custom styling */}
           <View style={styles.titleContainer}>
             <View>
               {/* Logo from assets */}
@@ -398,7 +274,6 @@ export default function TwoDOptimizer({ navigation }: any) {
           onPress={() => setActiveTab("calculator")}
         >
           <View style={styles.tabContent}>
-            {/* Custom Calculator SVG Icon */}
             <Svg
               width={20}
               height={20}
@@ -713,7 +588,6 @@ export default function TwoDOptimizer({ navigation }: any) {
         {/* Enhanced Results Section */}
         {optimized.length > 0 && (
           <View style={styles.resultsSection}>
-            {/* Results Header with Celebration Icon */}
             <View style={styles.resultsHeader}>
               <Text style={styles.resultsSectionTitle}>
                 Optimization Results
@@ -742,7 +616,7 @@ export default function TwoDOptimizer({ navigation }: any) {
               ref={viewRef}
               collapsable={false}
               style={{
-                backgroundColor: "#f8fafc", // Your app's background color
+                backgroundColor: "#f8fafc",
                 padding: 10,
               }}
             >
@@ -776,7 +650,6 @@ export default function TwoDOptimizer({ navigation }: any) {
                 <View style={[styles.summaryRow, styles.summaryTotalRow]}>
                   <Text style={styles.summaryLabel}>Total Pipes Used</Text>
                   <Text style={styles.summaryValue}></Text>
-                  {/* Empty, to keep 3-column structure */}
                   <Text style={styles.summaryQty}>
                     {optimized.reduce((sum, layout) => sum + layout.count, 0)}
                   </Text>
@@ -786,14 +659,14 @@ export default function TwoDOptimizer({ navigation }: any) {
               {/* Metrics Section */}
               <View style={styles.metricsGrid}>
                 <MetricCard
-                  label="Total parts length (Qty)"
+                  label="Required length"
                   value={`${orderPieces.reduce(
                     (sum, piece) => sum + piece.length * piece.quantity,
                     0
                   )} (${totalPiecesCut})`}
                 />
                 <MetricCard
-                  label="Used stocks total length (Yield)"
+                  label="Used length"
                   value={`${optimized.reduce(
                     (sum, layout) => sum + layout.pipeSize * layout.count,
                     0
@@ -810,57 +683,48 @@ export default function TwoDOptimizer({ navigation }: any) {
                   ).toFixed(1)}%)`}
                 />
                 <MetricCard
-                  label="Total cutting layouts"
-                  value={optimized.length.toString()}
+                  label="Total Wastage"
+                  value={`${
+                    rawOptimizationData.total_waste
+                  } (${rawOptimizationData.waste_percentage.toFixed(1)}%)`}
                 />
                 <MetricCard
-                  label="Total number of cuts"
-                  value={optimized
-                    .reduce(
-                      (sum, layout) => sum + layout.cuts.length * layout.count,
-                      0
-                    )
-                    .toString()}
+                  label="Total Pipe used"
+                  value={`${rawOptimizationData.total_rolls} `}
                 />
               </View>
 
               {/* Cutting Layouts */}
-              {optimized.map((layout, idx) => (
+              {rawOptimizationData?.cutting_patterns?.map((pattern, idx) => (
                 <View key={idx} style={styles.layoutCard}>
                   <Text style={styles.layoutId}>Layout ID {idx + 1}</Text>
+
                   <Text style={styles.layoutInfo}>
-                    Repetition: {layout.count}x | Stock length:{" "}
-                    {layout.pipeSize}"
+                    Repetition: x {pattern.usage} | Stock length:{" "}
+                    {pattern.parent_width}"
                   </Text>
 
-                  {/* Part List */}
-                  {Object.entries(getCutCounts(layout.cuts)).map(
-                    ([cut, count], i) => (
-                      <View key={i} style={styles.cutRow}>
-                        <Text style={styles.cutLabel}>{cut}"</Text>
-                        <Text style={styles.cutQty}>× {count}</Text>
-                      </View>
-                    )
-                  )}
-
-                  {/* Visual Cut Bar */}
+                  {/* Bar showing cut blocks */}
                   <View style={styles.cutBar}>
-                    {layout.cuts.map((cut, i) => (
+                    {pattern.cut_widths.map((width, i) => (
                       <View key={i} style={styles.cutBlock}>
-                        <Text style={styles.cutBlockText}>{cut}"</Text>
+                        <Text style={styles.cutBlockText}>
+                          {width}" × {pattern.cuts[i]}
+                        </Text>
                       </View>
                     ))}
                   </View>
 
+                  {/* Footer Info */}
                   <View style={styles.layoutFooter}>
                     <Text style={styles.footerText}>
-                      Cuts: {layout.cuts.length}
+                      Cuts: {pattern.cuts.length}
                     </Text>
                     <Text style={styles.footerText}>
-                      Remnant: {layout.remaining}"
+                      Remnant: {pattern.waste_per_roll}"
                     </Text>
                     <Text style={styles.footerText}>
-                      Efficiency: {layout.efficiency.toFixed(1)}%
+                      Total Waste: {pattern.total_waste}"
                     </Text>
                   </View>
                 </View>
@@ -1490,10 +1354,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     paddingVertical: 2,
+    marginBottom: 4, // optional space between rows
   },
   cutLabel: {
     fontSize: 14,
     color: "#374151",
+    marginRight: 8, // optional space between rows
   },
   cutQty: {
     fontWeight: "600",

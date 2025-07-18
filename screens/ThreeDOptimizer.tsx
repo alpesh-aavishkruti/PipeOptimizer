@@ -1,1196 +1,1976 @@
-import React, { useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import React, { useEffect, useRef, useState } from "react";
+import Constants from "expo-constants";
+
 import {
   View,
   Text,
-  TouchableOpacity,
-  TextInput,
-  ScrollView,
   StyleSheet,
-  Alert,
+  ScrollView,
+  SafeAreaView,
+  StatusBar,
+  TextInput,
+  Pressable,
+  Keyboard,
+  Image,
+  TouchableOpacity,
 } from "react-native";
+import Svg, { Path } from "react-native-svg";
+import { MaterialIcons } from "@expo/vector-icons";
+import { captureRef } from "react-native-view-shot";
+import * as Sharing from "expo-sharing";
+const API_BASE_URL = Constants.expoConfig?.extra?.API_BASE_URL ?? "";
+const API_KEY = Constants.expoConfig?.extra?.API_KEY ?? "";
+// Define types
 
-// Types
-interface StockGlass {
-  name: string;
-  w: number;
-  h: number;
-  qty: number;
-}
+type GlassSheet = {
+  length: number;
+  width: number;
+  stock: number;
+};
 
-interface CutDemand {
-  name: string;
-  w: number;
-  h: number;
-  qty: number;
-}
-
-interface Stock {
-  id: number;
-  name: string;
-  w: number;
-  h: number;
-  qty: number;
-  area: number;
-  original_qty: number;
-}
-
-interface Cut {
-  id: number;
-  name: string;
-  w: number;
-  h: number;
-  qty: number;
-  area: number;
-}
-
-interface CutInfo {
-  cut_id: number;
-  cut_name: string;
-  cut_size: [number, number];
-  cut_qty: number;
-  sheets_used: number;
-  rotated: boolean;
-  layout: string;
-  cuts_per_sheet: number;
-  waste_per_sheet: number;
-  total_waste: number;
-  efficiency: number;
-}
-
-interface SheetDetail {
-  sheet_number: number;
-  cuts: Array<{
-    name: string;
-    size: string;
-    quantity: number;
-    rotated: boolean;
-    layout: string;
-  }>;
-  used_area: number;
-  waste_area: number;
-  efficiency: number;
-}
-
-interface UsageSummary {
-  [key: string]: {
-    name: string;
-    size: string;
-    total_qty: number;
-    used: number;
-    remaining: number;
-    cuts: CutInfo[];
-    total_area: number;
-    used_area: number;
-    waste_area: number;
-    efficiency: number;
-    sheet_details: SheetDetail[];
-  };
-}
-
-interface UnfulfilledCut {
-  name: string;
-  size: string;
-  required: number;
-  fulfilled: number;
-  unfulfilled: number;
-}
-
-interface OptimizationResult {
-  usage_summary: UsageSummary;
-  unfulfilled_cuts: UnfulfilledCut[];
-  statistics: {
-    total_sheets_used: number;
-    total_used_area: number;
-    total_waste_area: number;
-    overall_efficiency: number;
-  };
-}
-interface FreeRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-interface SheetCut {
-  name: string;
-  size: string;
+type OrderPiece = {
+  length: number;
+  width: number;
   quantity: number;
-  rotated: boolean;
-  layout: string;
-}
+};
 
-const ThreeDOptimizer = () => {
-  const [stockGlass, setStockGlass] = useState<StockGlass[]>([
-    { name: "Standard Sheet", w: 1000, h: 2000, qty: 10 },
-  ]);
-  const [cutDemand, setCutDemand] = useState<CutDemand[]>([
-    { name: "Window A", w: 400, h: 600, qty: 5 },
-  ]);
-  const [result, setResult] = useState<OptimizationResult | null>(null);
-  const [activeTab, setActiveTab] = useState<
-    "input" | "results" | "visualization"
-  >("input");
+type OptimizedSheet = {
+  sheetSize: { length: number; width: number };
+  remaining: { length: number; width: number };
+  cuts: Array<{ length: number; width: number }>;
+  count: number;
+  efficiency: number;
+};
 
-  const computeOptimization = (
-    stockGlass: StockGlass[],
-    cutDemand: CutDemand[]
-  ): OptimizationResult => {
-    const stocks: Stock[] = [];
-    const cuts: Cut[] = [];
-
-    stockGlass.forEach((stock, i) => {
-      stocks.push({
-        id: i,
-        name: stock.name,
-        w: stock.w,
-        h: stock.h,
-        qty: stock.qty,
-        area: stock.w * stock.h,
-        original_qty: stock.qty,
-      });
-    });
-
-    cutDemand.forEach((cut, j) => {
-      cuts.push({
-        id: j,
-        name: cut.name,
-        w: cut.w,
-        h: cut.h,
-        qty: cut.qty,
-        area: cut.w * cut.h,
-      });
-    });
-
-    cuts.sort((a, b) => b.area - a.area);
-
-    const usage_summary: UsageSummary = {};
-    const reusableAreas: { w: number; h: number; stockId: number }[] = [];
-
-    stocks.forEach((s) => {
-      usage_summary[String(s.id)] = {
-        name: s.name,
-        size: `${s.w}×${s.h}`,
-        total_qty: s.qty,
-        used: 0,
-        remaining: s.qty,
-        cuts: [],
-        total_area: s.area,
-        used_area: 0,
-        waste_area: 0,
-        efficiency: 0,
-        sheet_details: [],
-      };
-    });
-
-    const unfulfilled_cuts: UnfulfilledCut[] = [];
-
-    cuts.forEach((cut) => {
-      let remaining_qty = cut.qty;
-      let cut_fulfilled = 0;
-
-      // First, try to fulfill from reusable areas (waste)
-      for (let i = reusableAreas.length - 1; i >= 0 && remaining_qty > 0; i--) {
-        const area = reusableAreas[i];
-        const stockKey = String(area.stockId);
-
-        const fit_normal =
-          Math.floor(area.w / cut.w) * Math.floor(area.h / cut.h);
-        const fit_rotated =
-          Math.floor(area.w / cut.h) * Math.floor(area.h / cut.w);
-
-        let cuts_possible = 0;
-        let rotated = false;
-
-        if (fit_rotated > fit_normal) {
-          cuts_possible = fit_rotated;
-          rotated = true;
-        } else {
-          cuts_possible = fit_normal;
-        }
-
-        if (cuts_possible > 0) {
-          const cuts_used = Math.min(cuts_possible, remaining_qty);
-          const cut_area =
-            (rotated ? cut.h * cut.w : cut.w * cut.h) * cuts_used;
-
-          usage_summary[stockKey].cuts.push({
-            cut_id: cut.id,
-            cut_name: cut.name,
-            cut_size: rotated ? [cut.h, cut.w] : [cut.w, cut.h],
-            cut_qty: cuts_used,
-            sheets_used: 0, // reuse
-            rotated,
-            layout: "waste reuse",
-            cuts_per_sheet: cuts_possible,
-            waste_per_sheet: 0,
-            total_waste: 0,
-            efficiency: 100,
-          });
-
-          usage_summary[stockKey].used_area += cut_area;
-
-          remaining_qty -= cuts_used;
-          cut_fulfilled += cuts_used;
-
-          // Remove used waste
-          reusableAreas.splice(i, 1);
-        }
-      }
-
-      // Now try to fulfill from stock sheets
-      const sortedStocks = [...stocks].sort((a, b) => b.area - a.area);
-
-      for (const stock of sortedStocks) {
-        if (remaining_qty <= 0) break;
-
-        const stockKey = String(stock.id);
-        const available_sheets = stock.qty - usage_summary[stockKey].used;
-        if (available_sheets <= 0) continue;
-
-        const fit_w1 = Math.floor(stock.w / cut.w);
-        const fit_h1 = Math.floor(stock.h / cut.h);
-        const cuts_normal = fit_w1 * fit_h1;
-
-        const fit_w2 = Math.floor(stock.w / cut.h);
-        const fit_h2 = Math.floor(stock.h / cut.w);
-        const cuts_rotated = fit_w2 * fit_h2;
-
-        let cuts_per_sheet: number;
-        let rotation_used: boolean;
-        let layout: string;
-        let cut_w: number, cut_h: number;
-
-        if (cuts_rotated > cuts_normal) {
-          cuts_per_sheet = cuts_rotated;
-          rotation_used = true;
-          layout = `${fit_w2}×${fit_h2}`;
-          cut_w = cut.h;
-          cut_h = cut.w;
-        } else {
-          cuts_per_sheet = cuts_normal;
-          rotation_used = false;
-          layout = `${fit_w1}×${fit_h1}`;
-          cut_w = cut.w;
-          cut_h = cut.h;
-        }
-
-        if (cuts_per_sheet === 0) continue;
-
-        const sheets_needed = Math.ceil(remaining_qty / cuts_per_sheet);
-        const sheets_available = Math.min(sheets_needed, available_sheets);
-        if (sheets_available <= 0) continue;
-
-        let cuts_made = 0;
-        let total_waste = 0;
-        const cut_area = cut_w * cut_h;
-
-        for (let sheet_num = 0; sheet_num < sheets_available; sheet_num++) {
-          const cuts_on_this_sheet = Math.min(
-            cuts_per_sheet,
-            remaining_qty - cuts_made
-          );
-          if (cuts_on_this_sheet > 0) {
-            cuts_made += cuts_on_this_sheet;
-            const sheet_cut_area = cuts_on_this_sheet * cut_area;
-            const sheet_waste = stock.area - sheet_cut_area;
-            total_waste += sheet_waste;
-
-            usage_summary[stockKey].sheet_details.push({
-              sheet_number: usage_summary[stockKey].used + sheet_num + 1,
-              cuts: [
-                {
-                  name: cut.name,
-                  size: `${cut_w}×${cut_h}`,
-                  quantity: cuts_on_this_sheet,
-                  rotated: rotation_used,
-                  layout,
-                },
-              ],
-              used_area: sheet_cut_area,
-              waste_area: sheet_waste,
-              efficiency:
-                Math.round((sheet_cut_area / stock.area) * 100 * 100) / 100,
-            });
-
-            // Save leftover area to reuse
-            reusableAreas.push({
-              w: stock.w,
-              h: stock.h,
-              stockId: stock.id,
-            });
-          }
-        }
-
-        const cut_info: CutInfo = {
-          cut_id: cut.id,
-          cut_name: cut.name,
-          cut_size: [cut_w, cut_h],
-          cut_qty: cuts_made,
-          sheets_used: sheets_available,
-          rotated: rotation_used,
-          layout,
-          cuts_per_sheet,
-          waste_per_sheet: total_waste / sheets_available,
-          total_waste: total_waste,
-          efficiency:
-            Math.round(
-              ((cuts_made * cut_area) / (stock.area * sheets_available)) *
-                100 *
-                100
-            ) / 100,
-        };
-
-        usage_summary[stockKey].cuts.push(cut_info);
-        usage_summary[stockKey].used += sheets_available;
-        usage_summary[stockKey].remaining -= sheets_available;
-        usage_summary[stockKey].used_area += cuts_made * cut_area;
-        usage_summary[stockKey].waste_area += total_waste;
-
-        remaining_qty -= cuts_made;
-        cut_fulfilled += cuts_made;
-      }
-
-      if (remaining_qty > 0) {
-        unfulfilled_cuts.push({
-          name: cut.name,
-          size: `${cut.w}×${cut.h}`,
-          required: cut.qty,
-          fulfilled: cut_fulfilled,
-          unfulfilled: remaining_qty,
-        });
-      }
-    });
-
-    // Final efficiency calculations
-    Object.entries(usage_summary).forEach(([_, summary]) => {
-      if (summary.used > 0) {
-        const total_stock_area = summary.total_area * summary.used;
-        summary.efficiency =
-          Math.round((summary.used_area / total_stock_area) * 100 * 100) / 100;
-      }
-    });
-
-    const total_sheets_used = Object.values(usage_summary).reduce(
-      (sum, s) => sum + s.used,
-      0
+const call2DOptimizationAPI = async (
+  availableSheets: GlassSheet[],
+  demandList: OrderPiece[]
+): Promise<OptimizedSheet[]> => {
+  try {
+    // Format stock sheets for API - using 'stock' instead of 'stock_sheets'
+    const stock = availableSheets.flatMap((sheet) =>
+      Array(sheet.stock)
+        .fill(0)
+        .map((_, i) => ({
+          w: sheet.width,
+          h: sheet.length,
+          id: `sheet_${sheet.length}x${sheet.width}_${i}`,
+        }))
     );
-    const total_used_area = Object.values(usage_summary).reduce(
-      (sum, s) => sum + s.used_area,
-      0
-    );
-    const total_waste_area = Object.values(usage_summary).reduce(
-      (sum, s) => sum + s.waste_area,
-      0
-    );
-    const overall_efficiency =
-      total_used_area + total_waste_area > 0
-        ? (total_used_area / (total_used_area + total_waste_area)) * 100
-        : 0;
+    console.log("stock:", stock);
 
-    return {
-      usage_summary,
-      unfulfilled_cuts,
-      statistics: {
-        total_sheets_used,
-        total_used_area: Math.round(total_used_area * 100) / 100,
-        total_waste_area: Math.round(total_waste_area * 100) / 100,
-        overall_efficiency: Math.round(overall_efficiency * 100) / 100,
-      },
+    // Format pieces for API
+    const pieces = demandList.flatMap((piece) =>
+      Array(piece.quantity)
+        .fill(0)
+        .map((_, i) => ({
+          w: piece.width,
+          h: piece.length,
+          id: `piece_${piece.length}x${piece.width}_${i}`,
+        }))
+    );
+
+    console.log("pieces:", pieces);
+
+    const requestBody = {
+      stock: stock, // Changed from 'stock_sheets' to 'stock'
+      pieces: pieces,
     };
-  };
 
-  const handleOptimize = () => {
-    try {
-      const result = computeOptimization(stockGlass, cutDemand);
-      setResult(result);
-      setActiveTab("results");
-    } catch (error) {
-      console.error("Optimization error:", error);
-      Alert.alert(
-        "Error",
-        "Error during optimization. Please check your inputs."
+    console.log("Request body:", JSON.stringify(requestBody, null, 2));
+
+    const response = await fetch(
+      `${API_BASE_URL}/api/calcuta/2d-optimization/`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": API_KEY,
+        },
+        body: JSON.stringify(requestBody),
+      }
+    );
+
+    console.log("API response status:", response.status);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("API error response:", errorText);
+      throw new Error(`API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    console.log("API response data:", data);
+    return mapApiResponseToOptimizedSheets(data);
+  } catch (error) {
+    console.error("API call failed:", error);
+    throw error;
+  }
+};
+
+const mapApiResponseToOptimizedSheets = (
+  apiResponse: any
+): OptimizedSheet[] => {
+  const optimizedSheets: OptimizedSheet[] = [];
+
+  // Check if the API response has the expected structure
+  if (!apiResponse.sheets || !Array.isArray(apiResponse.sheets)) {
+    console.error("Invalid API response structure:", apiResponse);
+    return optimizedSheets;
+  }
+
+  // Group identical sheet layouts
+  const layoutGroups: { [key: string]: OptimizedSheet } = {};
+
+  apiResponse.sheets.forEach((sheet: any) => {
+    // Extract cuts information from pieces
+    const cuts = sheet.pieces.map((piece: any) => ({
+      length: piece.h,
+      width: piece.w,
+      x: piece.x, // Include x position
+      y: piece.y, // Include y position
+    }));
+
+    // Create signature for grouping identical layouts
+    const cutsSignature = cuts
+      .map((c) => `${c.length}x${c.width}`)
+      .sort()
+      .join("|");
+
+    const signature = `${sheet.size.w}x${sheet.size.h}|${cutsSignature}`;
+
+    if (!layoutGroups[signature]) {
+      // Calculate efficiency (used area / total area)
+      const usedArea = cuts.reduce(
+        (sum, cut) => sum + cut.length * cut.width,
+        0
       );
+      const totalArea = sheet.size.w * sheet.size.h;
+      const efficiency = totalArea > 0 ? (usedArea / totalArea) * 100 : 0;
+
+      layoutGroups[signature] = {
+        sheetSize: {
+          length: sheet.size.h,
+          width: sheet.size.w,
+        },
+        cuts: cuts,
+        remaining: {
+          length: 0, // You might want to calculate this based on the layout
+          width: 0,
+        },
+        count: 0,
+        efficiency: efficiency,
+      };
+    }
+
+    layoutGroups[signature].count++;
+  });
+
+  return Object.values(layoutGroups);
+};
+
+const MetricCard = ({ label, value }: { label: string; value: string }) => (
+  <View style={styles.metricCard}>
+    <Text style={styles.metricLabel}>{label}</Text>
+    <Text style={styles.metricValue}>{value}</Text>
+  </View>
+);
+
+export default function ThreeDOptimizer() {
+  const [orderPieces, setOrderPieces] = useState<OrderPiece[]>([]);
+  const [lengthInput, setLengthInput] = useState<string>("");
+  const [widthInput, setWidthInput] = useState<string>("");
+  const [sheetLengthInput, setSheetLengthInput] = useState<string>("");
+  const [sheetWidthInput, setSheetWidthInput] = useState<string>("");
+  const [stockInput, setStockInput] = useState<string>("");
+  const [quantityInput, setQuantityInput] = useState<string>("");
+  const [activeTab, setActiveTab] = useState<"sheets" | "calculator">("sheets");
+  const [availableSheets, setAvailableSheets] = useState<GlassSheet[]>([]);
+  const [optimized, setOptimized] = useState<OptimizedSheet[]>([]);
+  const [totalPiecesNeeded, setTotalPiecesNeeded] = useState(0);
+  const [totalPiecesCut, setTotalPiecesCut] = useState(0);
+  const viewRef = useRef<View>(null);
+  console.log(optimized, "sdfbsdhjfbsdf");
+  useEffect(() => {
+    const loadSheets = async () => {
+      try {
+        const stored = await AsyncStorage.getItem("availableSheets");
+        if (stored) {
+          setAvailableSheets(JSON.parse(stored));
+        }
+      } catch (e) {
+        console.error("Failed to load sheets", e);
+      }
+    };
+
+    loadSheets();
+  }, []);
+
+  useEffect(() => {
+    const saveSheets = async () => {
+      try {
+        await AsyncStorage.setItem(
+          "availableSheets",
+          JSON.stringify(availableSheets)
+        );
+      } catch (e) {
+        console.error("Failed to save sheets", e);
+      }
+    };
+
+    saveSheets();
+  }, [availableSheets]);
+
+  const optimizeGlass = async () => {
+    if (orderPieces.length === 0) {
+      console.log("No order pieces to optimize");
+      return;
+    }
+
+    if (availableSheets.length === 0) {
+      console.log("No available sheets for optimization");
+      return;
+    }
+
+    const demandList = orderPieces
+      .filter((piece) => piece.quantity > 0)
+      .map((piece) => ({ ...piece }));
+
+    if (demandList.length === 0) {
+      console.log("No pieces with quantity > 0");
+      return;
+    }
+
+    const sheetsCopy = JSON.parse(JSON.stringify(availableSheets));
+
+    try {
+      const optimizedResult = await call2DOptimizationAPI(
+        sheetsCopy,
+        demandList
+      );
+      setOptimized(optimizedResult);
+
+      // Calculate totals
+      const totalNeeded = demandList.reduce(
+        (sum, piece) => sum + piece.quantity,
+        0
+      );
+      const totalCut = optimizedResult.reduce(
+        (sum, sheet) => sum + sheet.cuts.length * sheet.count,
+        0
+      );
+
+      setTotalPiecesNeeded(totalNeeded);
+      setTotalPiecesCut(totalCut);
+    } catch (error) {
+      console.error("Optimization failed:", error);
+      // Handle error (e.g., show alert to user)
     }
   };
 
-  const addStockGlass = () => {
-    setStockGlass([...stockGlass, { name: "", w: 0, h: 0, qty: 0 }]);
+  const resetAll = () => {
+    setOrderPieces([]);
+    setLengthInput("");
+    setWidthInput("");
+    setSheetLengthInput("");
+    setSheetWidthInput("");
+    setQuantityInput("");
+    setStockInput("");
+    setOptimized([]);
+    setAvailableSheets([]);
+    setTotalPiecesNeeded(0);
+    setTotalPiecesCut(0);
   };
 
-  const removeStockGlass = (index: number) => {
-    setStockGlass(stockGlass.filter((_, i) => i !== index));
-  };
-
-  const updateStockGlass = (
-    index: number,
-    field: keyof StockGlass,
-    value: string | number
-  ) => {
-    const updated = [...stockGlass];
-    updated[index] = { ...updated[index], [field]: value };
-    setStockGlass(updated);
-  };
-
-  const addCutDemand = () => {
-    setCutDemand([...cutDemand, { name: "", w: 0, h: 0, qty: 0 }]);
-  };
-
-  const removeCutDemand = (index: number) => {
-    setCutDemand(cutDemand.filter((_, i) => i !== index));
-  };
-
-  const updateCutDemand = (
-    index: number,
-    field: keyof CutDemand,
-    value: string | number
-  ) => {
-    const updated = [...cutDemand];
-    updated[index] = { ...updated[index], [field]: value };
-    setCutDemand(updated);
-  };
-
-  const renderInputRow = (
-    item: StockGlass | CutDemand,
-    index: number,
-    type: "stock" | "cut"
-  ) => {
-    const updateFn = type === "stock" ? updateStockGlass : updateCutDemand;
-    const removeFn = type === "stock" ? removeStockGlass : removeCutDemand;
-
-    return (
-      <View key={index} style={styles.inputRow}>
-        <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Name</Text>
-          <TextInput
-            style={styles.textInput}
-            value={item.name}
-            onChangeText={(value) => updateFn(index, "name", value)}
-            placeholder="Enter name"
-          />
-        </View>
-        <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Width</Text>
-          <TextInput
-            style={styles.numberInput}
-            value={item.w.toString()}
-            onChangeText={(value) => updateFn(index, "w", Number(value) || 0)}
-            placeholder="0"
-            keyboardType="numeric"
-          />
-        </View>
-        <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Height</Text>
-          <TextInput
-            style={styles.numberInput}
-            value={item.h.toString()}
-            onChangeText={(value) => updateFn(index, "h", Number(value) || 0)}
-            placeholder="0"
-            keyboardType="numeric"
-          />
-        </View>
-        <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Quantity</Text>
-          <TextInput
-            style={styles.numberInput}
-            value={item.qty.toString()}
-            onChangeText={(value) => updateFn(index, "qty", Number(value) || 0)}
-            placeholder="0"
-            keyboardType="numeric"
-          />
-        </View>
-        <TouchableOpacity
-          style={styles.deleteButton}
-          onPress={() => removeFn(index)}
-        >
-          <Text style={styles.deleteButtonText}>Delete</Text>
-        </TouchableOpacity>
-      </View>
+  const removeSheet = (length: number, width: number) => {
+    setAvailableSheets((prev) =>
+      prev.filter(
+        (sheet) => !(sheet.length === length && sheet.width === width)
+      )
     );
   };
 
-  const renderVisualization = () => {
-    if (!result) return null;
-
-    return (
-      <ScrollView style={styles.visualizationContainer}>
-        <Text style={styles.visualizationTitle}>
-          Sheet Layout Visualization
-        </Text>
-
-        {Object.entries(result.usage_summary).map(
-          ([stockId, summary]) =>
-            summary.used > 0 && (
-              <View key={stockId} style={styles.visualizationItem}>
-                <Text style={styles.visualizationItemTitle}>
-                  {summary.name} ({summary.size}) - {summary.used} sheets used
-                </Text>
-
-                <View style={styles.sheetGrid}>
-                  {summary.sheet_details.map((sheet, index) => (
-                    <View key={index} style={styles.sheetContainer}>
-                      <Text style={styles.sheetTitle}>
-                        Sheet #{sheet.sheet_number}
-                      </Text>
-
-                      <View style={styles.sheetVisualization}>
-                        <View style={styles.sheetContent}>
-                          <Text style={styles.sheetSizeText}>
-                            {summary.size}
-                          </Text>
-
-                          {sheet.cuts.map((cut, cutIndex) => (
-                            <View key={cutIndex} style={styles.cutInfo}>
-                              <Text style={styles.cutName}>
-                                {cut.rotated ? "↻ " : ""}
-                                {cut.name}
-                              </Text>
-                              <Text style={styles.cutDetails}>
-                                {cut.size} × {cut.quantity} ({cut.layout})
-                              </Text>
-                            </View>
-                          ))}
-
-                          <Text style={styles.sheetEfficiency}>
-                            {sheet.efficiency}% efficient
-                          </Text>
-                        </View>
-                      </View>
-
-                      <View style={styles.sheetStats}>
-                        <Text style={styles.sheetStat}>
-                          Used: {sheet.used_area.toFixed(0)} sq units
-                        </Text>
-                        <Text style={styles.sheetStat}>
-                          Waste: {sheet.waste_area.toFixed(0)} sq units
-                        </Text>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            )
-        )}
-      </ScrollView>
+  const removeOrderPiece = (indexToRemove: number) => {
+    setOrderPieces((prev) =>
+      prev.filter((_, index) => index !== indexToRemove)
     );
+  };
+
+  const getCutCounts = (cuts: Array<{ length: number; width: number }>) => {
+    return cuts.reduce((acc, cut) => {
+      const key = `${cut.length}x${cut.width}`;
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+  };
+
+  const shareResults = async () => {
+    try {
+      if (!viewRef.current) return;
+      const uri = await captureRef(viewRef, {
+        format: "png",
+        quality: 1,
+      });
+      await Sharing.shareAsync(uri);
+    } catch (error) {
+      console.error("Error sharing results:", error);
+    }
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>Glass Cutting Optimizer</Text>
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="light-content" backgroundColor="#1a365d" />
 
-      {/* Tab Navigation */}
-      <View style={styles.tabNavigation}>
-        <TouchableOpacity
-          style={[
-            styles.tabButton,
-            activeTab === "input" && styles.tabButtonActive,
-          ]}
-          onPress={() => setActiveTab("input")}
-        >
-          <Text
-            style={[
-              styles.tabButtonText,
-              activeTab === "input" && styles.tabButtonTextActive,
-            ]}
-          >
-            Input Data
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.tabButton,
-            activeTab === "results" && styles.tabButtonActive,
-            !result && styles.tabButtonDisabled,
-          ]}
-          onPress={() => setActiveTab("results")}
-          disabled={!result}
-        >
-          <Text
-            style={[
-              styles.tabButtonText,
-              activeTab === "results" && styles.tabButtonTextActive,
-              !result && styles.tabButtonTextDisabled,
-            ]}
-          >
-            Results
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.tabButton,
-            activeTab === "visualization" && styles.tabButtonActive,
-            !result && styles.tabButtonDisabled,
-          ]}
-          onPress={() => setActiveTab("visualization")}
-          disabled={!result}
-        >
-          <Text
-            style={[
-              styles.tabButtonText,
-              activeTab === "visualization" && styles.tabButtonTextActive,
-              !result && styles.tabButtonTextDisabled,
-            ]}
-          >
-            Visualization
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Input Tab */}
-      {activeTab === "input" && (
-        <View style={styles.inputTab}>
-          {/* Stock Glass Section */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Stock Glass</Text>
-              <TouchableOpacity
-                onPress={addStockGlass}
-                style={styles.addButton}
-              >
-                <Text style={styles.addButtonText}>Add Stock</Text>
-              </TouchableOpacity>
-            </View>
-
-            {stockGlass.map((stock, index) =>
-              renderInputRow(stock, index, "stock")
-            )}
-          </View>
-
-          {/* Cut Demand Section */}
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Cut Demand</Text>
-              <TouchableOpacity onPress={addCutDemand} style={styles.addButton}>
-                <Text style={styles.addButtonText}>Add Cut</Text>
-              </TouchableOpacity>
-            </View>
-
-            {cutDemand.map((cut, index) => renderInputRow(cut, index, "cut"))}
-          </View>
-
-          {/* Optimize Button */}
-          <View style={styles.optimizeButtonContainer}>
-            <TouchableOpacity
-              onPress={handleOptimize}
-              style={styles.optimizeButton}
-            >
-              <Text style={styles.optimizeButtonText}>Optimize Cuts</Text>
-            </TouchableOpacity>
+      {/* Header */}
+      <View style={styles.headerContainer}>
+        <View style={styles.headerBackground}>
+          <View style={styles.titleContainer}>
+            <Image
+              source={require("../assets/aavishkruti-logo.png")}
+              style={styles.logo}
+              resizeMode="contain"
+            />
           </View>
         </View>
-      )}
+      </View>
 
-      {/* Results Tab */}
-      {activeTab === "results" && result && (
-        <View style={styles.resultsTab}>
-          {/* Statistics */}
-          <View style={styles.statisticsSection}>
-            <Text style={styles.statisticsTitle}>Overall Statistics</Text>
-            <View style={styles.statisticsGrid}>
-              <View style={styles.statisticItem}>
-                <Text style={[styles.statisticValue, { color: "#3b82f6" }]}>
-                  {result.statistics.total_sheets_used}
-                </Text>
-                <Text style={styles.statisticLabel}>Total Sheets Used</Text>
-              </View>
-              <View style={styles.statisticItem}>
-                <Text style={[styles.statisticValue, { color: "#10b981" }]}>
-                  {result.statistics.total_used_area.toLocaleString()}
-                </Text>
-                <Text style={styles.statisticLabel}>Used Area</Text>
-              </View>
-              <View style={styles.statisticItem}>
-                <Text style={[styles.statisticValue, { color: "#ef4444" }]}>
-                  {result.statistics.total_waste_area.toLocaleString()}
-                </Text>
-                <Text style={styles.statisticLabel}>Waste Area</Text>
-              </View>
-              <View style={styles.statisticItem}>
-                <Text style={[styles.statisticValue, { color: "#8b5cf6" }]}>
-                  {result.statistics.overall_efficiency}%
-                </Text>
-                <Text style={styles.statisticLabel}>Overall Efficiency</Text>
-              </View>
-            </View>
+      {/* Tabs */}
+      <View style={styles.tabContainer}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.tab,
+            activeTab === "sheets" && styles.tabActive,
+            pressed && styles.tabPressed,
+          ]}
+          onPress={() => setActiveTab("sheets")}
+        >
+          <View style={styles.tabContent}>
+            <Svg
+              width={20}
+              height={20}
+              viewBox="0 0 24 24"
+              style={styles.tabIcon}
+            >
+              <Path
+                d="M19 5v14H5V5h14m0-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"
+                fill={activeTab === "sheets" ? "#fff" : "#f97316"}
+              />
+              <Path
+                d="M8 8h8v8H8z"
+                fill={activeTab === "sheets" ? "#fff" : "#f97316"}
+              />
+            </Svg>
+            <Text
+              style={[
+                styles.tabtext,
+                activeTab === "sheets" && styles.tabtextActive,
+              ]}
+            >
+              Glass Sheets
+            </Text>
           </View>
+        </Pressable>
 
-          {/* Usage Summary */}
-          <View style={styles.usageSection}>
-            <Text style={styles.sectionTitle}>Usage Summary</Text>
-            {Object.entries(result.usage_summary).map(([stockId, summary]) => (
-              <View key={stockId} style={styles.usageItem}>
-                <View style={styles.usageHeader}>
-                  <View>
-                    <Text style={styles.usageName}>{summary.name}</Text>
-                    <Text style={styles.usageSize}>Size: {summary.size}</Text>
-                  </View>
-                  <View style={styles.usageStats}>
-                    <Text style={styles.usageStat}>
-                      Used: {summary.used}/{summary.total_qty} sheets
-                    </Text>
-                    <Text style={styles.usageEfficiency}>
-                      Efficiency: {summary.efficiency}%
-                    </Text>
-                  </View>
+        <Pressable
+          style={({ pressed }) => [
+            styles.tab,
+            activeTab === "calculator" && styles.tabActive,
+            pressed && styles.tabPressed,
+          ]}
+          onPress={() => setActiveTab("calculator")}
+        >
+          <View style={styles.tabContent}>
+            <Svg
+              width={20}
+              height={20}
+              viewBox="0 0 24 24"
+              style={styles.tabIcon}
+            >
+              <Path
+                d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14z"
+                fill={activeTab === "calculator" ? "#fff" : "#f97316"}
+              />
+              <Path
+                d="M8 8h2v2H8zm4 0h2v2h-2zm-4 4h2v2H8zm4 0h2v2h-2zm-4 4h2v2H8zm4 0h2v2h-2zm4-8h2v2h-2zm0 4h2v2h-2zm0 4h2v2h-2z"
+                fill={activeTab === "calculator" ? "#fff" : "#f97316"}
+              />
+            </Svg>
+            <Text
+              style={[
+                styles.tabtext,
+                activeTab === "calculator" && styles.tabtextActive,
+              ]}
+            >
+              Calculator
+            </Text>
+          </View>
+        </Pressable>
+      </View>
+
+      <ScrollView
+        style={styles.scrollView}
+        showsVerticalScrollIndicator={false}
+      >
+        {activeTab === "sheets" && (
+          <View style={styles.section}>
+            <View style={styles.inputCard}>
+              <View style={styles.inputRow}>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Sheet Length (mm)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="e.g., 2440"
+                    value={sheetLengthInput}
+                    keyboardType="numeric"
+                    onChangeText={setSheetLengthInput}
+                  />
                 </View>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Sheet Width (mm)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="e.g., 1220"
+                    value={sheetWidthInput}
+                    keyboardType="numeric"
+                    onChangeText={setSheetWidthInput}
+                  />
+                </View>
+              </View>
+              <View style={styles.inputRow}>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Stock Quantity</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="e.g., 10"
+                    value={stockInput}
+                    keyboardType="numeric"
+                    onChangeText={setStockInput}
+                  />
+                </View>
+              </View>
 
-                {summary.cuts.length > 0 && (
-                  <View style={styles.cutsContainer}>
-                    {summary.cuts.map((cut, index) => (
-                      <View key={index} style={styles.cutItem}>
-                        <Text style={styles.cutItemText}>
-                          {cut.cut_name} - {cut.cut_size[0]}×{cut.cut_size[1]} ×{" "}
-                          {cut.cut_qty}
-                        </Text>
-                        <Text style={styles.cutItemDetails}>
-                          Layout: {cut.layout} | Rotated:{" "}
-                          {cut.rotated ? "Yes" : "No"} | Efficiency:{" "}
-                          {cut.efficiency}%
+              <Pressable
+                style={({ pressed }) => [
+                  styles.addButton,
+                  pressed && styles.addButtonPressed,
+                ]}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  const length = parseInt(sheetLengthInput);
+                  const width = parseInt(sheetWidthInput);
+                  const stock = parseInt(stockInput);
+
+                  if (
+                    !isNaN(length) &&
+                    !isNaN(width) &&
+                    !isNaN(stock) &&
+                    length > 0 &&
+                    width > 0 &&
+                    stock > 0
+                  ) {
+                    setAvailableSheets((prev) => {
+                      const existingIndex = prev.findIndex(
+                        (s) => s.length === length && s.width === width
+                      );
+                      if (existingIndex !== -1) {
+                        const updated = [...prev];
+                        updated[existingIndex].stock += stock;
+                        return updated;
+                      } else {
+                        return [...prev, { length, width, stock }];
+                      }
+                    });
+                    setSheetLengthInput("");
+                    setSheetWidthInput("");
+                    setStockInput("");
+                  }
+                }}
+              >
+                <View style={styles.addButtonContent}>
+                  <Text style={styles.addButtonIcon}>+</Text>
+                  <Text style={styles.addButtonText}>Add Sheet</Text>
+                </View>
+              </Pressable>
+            </View>
+
+            <View style={styles.tableContainer}>
+              {availableSheets.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <View style={styles.emptyStateIconContainer}>
+                    <Text style={styles.emptyStateIcon}>📦</Text>
+                  </View>
+                  <Text style={styles.emptyStateText}>
+                    No glass sheets in inventory
+                  </Text>
+                  <Text style={styles.emptyStateSubtext}>
+                    Add sheets using the form above
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.tableHeader}>
+                    <Text style={styles.tableHeaderText}>Size (mm)</Text>
+                    <Text style={styles.tableHeaderText}>Stock</Text>
+                    <Text style={styles.tableHeaderText}>Action</Text>
+                  </View>
+
+                  {availableSheets.map((sheet, index) => (
+                    <View key={index} style={styles.tableRow}>
+                      <View style={styles.tableCell}>
+                        <Text style={styles.tableCellText}>
+                          {sheet.length}×{sheet.width}
                         </Text>
                       </View>
-                    ))}
-                  </View>
-                )}
-              </View>
-            ))}
+                      <View style={styles.tableCell}>
+                        <View style={styles.stockBadge}>
+                          <Text style={styles.stockBadgeText}>
+                            {sheet.stock}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.tableCell}>
+                        <Pressable
+                          style={({ pressed }) => [
+                            pressed && styles.deleteButtonPressed,
+                          ]}
+                          onPress={() => removeSheet(sheet.length, sheet.width)}
+                        >
+                          <Text style={styles.deleteButtonIcon}>🗑️</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ))}
+                </>
+              )}
+            </View>
           </View>
+        )}
 
-          {/* Unfulfilled Cuts */}
-          {result.unfulfilled_cuts.length > 0 && (
-            <View style={styles.unfulfilledSection}>
-              <Text style={styles.unfulfilledTitle}>Unfulfilled Cuts</Text>
-              {result.unfulfilled_cuts.map((cut, index) => (
-                <View key={index} style={styles.unfulfilledItem}>
-                  <Text style={styles.unfulfilledItemText}>
-                    {cut.name} ({cut.size}) - Required: {cut.required},
-                    Fulfilled: {cut.fulfilled}
+        {activeTab === "calculator" && (
+          <View style={styles.section}>
+            <View style={styles.inputCard}>
+              <View style={styles.inputRow}>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Piece Length (mm)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="e.g., 600"
+                    value={lengthInput}
+                    keyboardType="numeric"
+                    onChangeText={setLengthInput}
+                  />
+                </View>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Piece Width (mm)</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="e.g., 400"
+                    value={widthInput}
+                    keyboardType="numeric"
+                    onChangeText={setWidthInput}
+                  />
+                </View>
+              </View>
+              <View style={styles.inputRow}>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Quantity</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="e.g., 5"
+                    value={quantityInput}
+                    keyboardType="numeric"
+                    onChangeText={setQuantityInput}
+                  />
+                </View>
+              </View>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.addButton,
+                  pressed && styles.addButtonPressed,
+                ]}
+                onPress={() => {
+                  const length = parseInt(lengthInput);
+                  const width = parseInt(widthInput);
+                  const quantity = parseInt(quantityInput);
+                  if (
+                    !isNaN(length) &&
+                    !isNaN(width) &&
+                    !isNaN(quantity) &&
+                    length > 0 &&
+                    width > 0 &&
+                    quantity > 0
+                  ) {
+                    setOrderPieces([
+                      ...orderPieces,
+                      { length, width, quantity },
+                    ]);
+                    setLengthInput("");
+                    setWidthInput("");
+                    setQuantityInput("");
+                  }
+                }}
+              >
+                <View style={styles.addButtonContent}>
+                  <Text style={styles.addButtonIcon}>+</Text>
+                  <Text style={styles.addButtonText}>Add Piece</Text>
+                </View>
+              </Pressable>
+            </View>
+
+            <View style={styles.tableContainer}>
+              {orderPieces.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <View style={styles.emptyStateIconContainer}>
+                    <Text style={styles.emptyStateIcon}>✂️</Text>
+                  </View>
+                  <Text style={styles.emptyStateText}>
+                    No cutting requirements
                   </Text>
-                  <Text style={styles.unfulfilledCount}>
-                    Unfulfilled: {cut.unfulfilled}
+                  <Text style={styles.emptyStateSubtext}>
+                    Add glass pieces to cut above
                   </Text>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.tableHeader}>
+                    <Text style={styles.tableHeaderText}>Size (mm)</Text>
+                    <Text style={styles.tableHeaderText}>Qty</Text>
+                    <Text style={styles.tableHeaderText}></Text>
+                  </View>
+
+                  {orderPieces.map((item, index) => (
+                    <View key={index} style={styles.tableRow}>
+                      <View style={styles.tableCell}>
+                        <Text style={styles.tableCellText}>
+                          {item.length}×{item.width}
+                        </Text>
+                      </View>
+                      <View style={styles.tableCell}>
+                        <View style={styles.quantityBadge}>
+                          <Text style={styles.quantityBadgeText}>
+                            {item.quantity}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.tableCell}>
+                        <Pressable
+                          style={({ pressed }) => [
+                            pressed && styles.deleteButtonPressed,
+                          ]}
+                          onPress={() => removeOrderPiece(index)}
+                        >
+                          <Text style={styles.deleteButtonIcon}>🗑️</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  ))}
+                </>
+              )}
+            </View>
+          </View>
+        )}
+
+        <View style={styles.actionButtons}>
+          {activeTab === "calculator" && (
+            <Pressable
+              style={({ pressed }) => [
+                styles.optimizeButton,
+                orderPieces.length === 0 && styles.buttonDisabled,
+                pressed && styles.optimizeButtonPressed,
+              ]}
+              onPress={optimizeGlass}
+              disabled={orderPieces.length === 0}
+            >
+              <View style={styles.buttonContent}>
+                <Text style={styles.optimizeButtonIcon}>✂️</Text>
+                <Text style={styles.optimizeButtonText}>Optimize Cuts</Text>
+              </View>
+            </Pressable>
+          )}
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.resetButton,
+              pressed && styles.resetButtonPressed,
+            ]}
+            onPress={resetAll}
+          >
+            <View style={styles.buttonContent}>
+              <Text style={styles.resetButtonIcon}>🔄</Text>
+              <Text style={styles.resetButtonText}>Reset All</Text>
+            </View>
+          </Pressable>
+        </View>
+
+        {optimized.length > 0 && (
+          <View style={styles.resultsSection}>
+            <View style={styles.resultsHeader}>
+              <Text style={styles.resultsSectionTitle}>
+                Optimization Results
+              </Text>
+              <TouchableOpacity onPress={shareResults}>
+                <MaterialIcons name="share" size={24} color="#3b82f6" />
+              </TouchableOpacity>
+            </View>
+
+            <View ref={viewRef} collapsable={false}>
+              <View style={styles.summarySection}>
+                <Text style={styles.sectionTitle}>Required Sheets</Text>
+                <View style={[styles.summaryRow, styles.summaryHeader]}>
+                  <Text style={styles.summaryHeaderText}>Sheet Size</Text>
+                  <Text style={styles.summaryHeaderText}>Quantity</Text>
+                </View>
+
+                {Object.entries(
+                  optimized.reduce((acc: any, layout) => {
+                    const key = `${layout.sheetSize.length}x${layout.sheetSize.width}`;
+                    acc[key] = (acc[key] || 0) + layout.count;
+                    return acc;
+                  }, {})
+                ).map(([sheetSize, totalCount]) => (
+                  <View key={sheetSize} style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>{sheetSize} mm</Text>
+                    <Text style={styles.summaryQty}>× {totalCount}</Text>
+                  </View>
+                ))}
+
+                <View style={[styles.summaryRow, styles.summaryTotalRow]}>
+                  <Text style={styles.summaryLabel}>Total Sheets Used</Text>
+                  <Text style={styles.summaryValue}>
+                    {optimized.reduce((sum, layout) => sum + layout.count, 0)}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.metricsGrid}>
+                <MetricCard
+                  label="Total pieces area (Qty)"
+                  value={`${orderPieces.reduce(
+                    (sum, piece) =>
+                      sum + piece.length * piece.width * piece.quantity,
+                    0
+                  )} mm² (${totalPiecesCut})`}
+                />
+                <MetricCard
+                  label="Used sheets total area"
+                  value={`${optimized.reduce(
+                    (sum, layout) =>
+                      sum +
+                      layout.sheetSize.length *
+                        layout.sheetSize.width *
+                        layout.count,
+                    0
+                  )} mm²`}
+                />
+                <MetricCard
+                  label="Material Utilization"
+                  value={`${(
+                    (orderPieces.reduce(
+                      (sum, piece) =>
+                        sum + piece.length * piece.width * piece.quantity,
+                      0
+                    ) /
+                      optimized.reduce(
+                        (sum, layout) =>
+                          sum +
+                          layout.sheetSize.length *
+                            layout.sheetSize.width *
+                            layout.count,
+                        0
+                      )) *
+                    100
+                  ).toFixed(1)}%`}
+                />
+                <MetricCard
+                  label="Total layouts"
+                  value={optimized.length.toString()}
+                />
+              </View>
+
+              {optimized.map((sheet, idx) => (
+                <View
+                  style={[
+                    styles.sheetVisual,
+                    {
+                      aspectRatio:
+                        sheet.sheetSize.width / sheet.sheetSize.length,
+                    },
+                  ]}
+                >
+                  {sheet.cuts.map((cut, i) => {
+                    const widthPct = (cut.width / sheet.sheetSize.width) * 100;
+                    const heightPct =
+                      (cut.length / sheet.sheetSize.length) * 100;
+                    const leftPct = (cut.x / sheet.sheetSize.width) * 100;
+                    const topPct = (cut.y / sheet.sheetSize.length) * 100;
+
+                    return (
+                      <View
+                        key={i}
+                        style={[
+                          styles.cutVisual,
+                          {
+                            position: "absolute",
+                            width: `${widthPct}%`,
+                            height: `${heightPct}%`,
+                            left: `${leftPct}%`,
+                            top: `${topPct}%`,
+                            backgroundColor: `hsl(${i * 30}, 70%, 80%)`,
+                          },
+                        ]}
+                      >
+                        <Text style={styles.cutVisualText}>
+                          {cut.length}×{cut.width}
+                        </Text>
+                      </View>
+                    );
+                  })}
                 </View>
               ))}
             </View>
-          )}
-        </View>
-      )}
-
-      {/* Visualization Tab */}
-      {activeTab === "visualization" && result && renderVisualization()}
-    </ScrollView>
+          </View>
+        )}
+      </ScrollView>
+    </SafeAreaView>
   );
-};
+}
 
 const styles = StyleSheet.create({
-  container: {
+  safe: {
     flex: 1,
     backgroundColor: "#f8fafc",
-    padding: 16,
   },
-  title: {
-    fontSize: 28,
-    fontWeight: "bold",
-    marginBottom: 24,
-    textAlign: "center",
-    color: "#1e293b",
+  headerContainer: {
+    paddingBottom: 15,
+  },
+  headerBackground: {
+    backgroundColor: "#f8f9fa",
+    paddingTop: 20,
   },
 
-  // Tab Navigation
-  tabNavigation: {
+  titleContainer: {
     flexDirection: "row",
-    marginBottom: 24,
-    borderRadius: 12,
-    overflow: "hidden",
-    backgroundColor: "#e2e8f0",
-    padding: 4,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 12,
   },
-  tabButton: {
+  logo: {
+    height: 40,
+    width: 200,
+  },
+  tabContainer: {
+    flexDirection: "row",
+    backgroundColor: "#fff",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+  },
+  tab: {
     flex: 1,
     paddingVertical: 12,
-    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabActive: {
+    backgroundColor: "#f97316",
+  },
+  tabPressed: {
+    opacity: 0.8,
+  },
+  tabContent: {
+    flexDirection: "row",
     alignItems: "center",
   },
-  tabButtonActive: {
-    backgroundColor: "white",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
+  tabIcon: {
+    marginRight: 8,
   },
-  tabButtonDisabled: {
-    opacity: 0.6,
-  },
-  tabButtonText: {
+  tabtext: {
     fontSize: 14,
-    fontWeight: "600",
-    color: "#64748b",
+    fontWeight: "500",
+    color: "#f97316",
   },
-  tabButtonTextActive: {
-    color: "#3b82f6",
+  tabtextActive: {
+    color: "#fff",
   },
-  tabButtonTextDisabled: {
-    color: "#94a3b8",
-  },
-
-  // Input Tab
-  inputTab: {
+  scrollView: {
     flex: 1,
   },
   section: {
-    marginBottom: 28,
-    backgroundColor: "white",
-    borderRadius: 12,
     padding: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 1,
   },
-  sectionHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#1e293b",
-  },
-  addButton: {
-    backgroundColor: "#3b82f6",
-    paddingVertical: 8,
-    paddingHorizontal: 16,
+  inputCard: {
+    backgroundColor: "#fff",
     borderRadius: 8,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  addButtonText: {
-    color: "white",
-    fontWeight: "500",
-    fontSize: 14,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
   },
   inputRow: {
-    backgroundColor: "#f8fafc",
-    padding: 16,
+    flexDirection: "row",
     marginBottom: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
   },
   inputGroup: {
-    marginBottom: 12,
-  },
-  inputLabel: {
-    fontSize: 14,
-    fontWeight: "500",
-    marginBottom: 6,
-    color: "#475569",
-  },
-  textInput: {
-    borderWidth: 1,
-    borderColor: "#cbd5e1",
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    backgroundColor: "white",
-    fontSize: 16,
-    color: "#1e293b",
-  },
-  numberInput: {
-    borderWidth: 1,
-    borderColor: "#cbd5e1",
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    backgroundColor: "white",
-    fontSize: 16,
-    color: "#1e293b",
-  },
-  deleteButton: {
-    backgroundColor: "#fee2e2",
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-    alignSelf: "flex-start",
-    marginTop: 8,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  deleteButtonText: {
-    color: "#dc2626",
-    fontSize: 14,
-    fontWeight: "500",
-  },
-  optimizeButtonContainer: {
-    marginTop: 24,
-  },
-  optimizeButton: {
-    backgroundColor: "#3b82f6",
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: "center",
-    shadowColor: "#2563eb",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  optimizeButtonText: {
-    color: "white",
-    fontSize: 18,
-    fontWeight: "600",
-  },
-
-  // Results Tab
-  resultsTab: {
-    flex: 1,
-  },
-  statisticsSection: {
-    backgroundColor: "white",
-    padding: 20,
-    borderRadius: 12,
-    marginBottom: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 1,
-  },
-  statisticsTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    marginBottom: 16,
-    color: "#1e293b",
-  },
-  statisticsGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  statisticItem: {
-    width: "48%",
-    backgroundColor: "#f8fafc",
-    padding: 16,
-    borderRadius: 8,
-    alignItems: "center",
-  },
-  statisticValue: {
-    fontSize: 24,
-    fontWeight: "bold",
-    marginBottom: 4,
-  },
-  statisticLabel: {
-    fontSize: 12,
-    color: "#64748b",
-    textAlign: "center",
-  },
-  usageSection: {
-    marginBottom: 20,
-  },
-  usageItem: {
-    backgroundColor: "white",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 1,
-  },
-  usageHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  usageName: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#1e40af",
-  },
-  usageSize: {
-    fontSize: 14,
-    color: "#64748b",
-    marginTop: 2,
-  },
-  usageStats: {
-    alignItems: "flex-end",
-  },
-  usageStat: {
-    fontSize: 14,
-    color: "#1e293b",
-  },
-  usageEfficiency: {
-    fontSize: 14,
-    color: "#10b981",
-    fontWeight: "600",
-    marginTop: 4,
-  },
-  cutsContainer: {
-    marginTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: "#e2e8f0",
-    paddingTop: 12,
-  },
-  cutItem: {
-    backgroundColor: "#f1f5f9",
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 8,
-  },
-  cutItemText: {
-    fontSize: 14,
-    fontWeight: "500",
-    color: "#1e293b",
-  },
-  cutItemDetails: {
-    fontSize: 12,
-    color: "#64748b",
-    marginTop: 4,
-  },
-  unfulfilledSection: {
-    backgroundColor: "#fff1f2",
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#ffe4e6",
-  },
-  unfulfilledTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    marginBottom: 12,
-    color: "#b91c1c",
-  },
-  unfulfilledItem: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: "#fecdd3",
-  },
-  unfulfilledItemText: {
-    fontSize: 14,
-    color: "#475569",
     flex: 1,
     marginRight: 8,
   },
-  unfulfilledCount: {
-    fontSize: 14,
-    color: "#ef4444",
-    fontWeight: "600",
+  inputLabel: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: "#64748b",
+    marginBottom: 4,
   },
-
-  // Visualization Tab
-  visualizationContainer: {
-    flex: 1,
-  },
-  visualizationTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    marginBottom: 16,
-    color: "#1e293b",
-  },
-  visualizationItem: {
-    backgroundColor: "white",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 1,
-  },
-  visualizationItemTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    marginBottom: 12,
-    color: "#1e293b",
-  },
-  sheetGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "space-between",
-    gap: 12,
-  },
-  sheetContainer: {
-    width: "48%",
+  input: {
     backgroundColor: "#f8fafc",
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: "#e2e8f0",
-  },
-  sheetTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    marginBottom: 8,
-    color: "#1e293b",
-  },
-  sheetVisualization: {
-    aspectRatio: 1,
-    backgroundColor: "white",
     borderWidth: 1,
     borderColor: "#e2e8f0",
     borderRadius: 4,
-    marginBottom: 8,
-    position: "relative",
+    padding: 8,
+    fontSize: 14,
+  },
+  addButton: {
+    backgroundColor: "#f97316",
+    borderRadius: 4,
+    padding: 12,
+    alignItems: "center",
+  },
+  addButtonPressed: {
+    backgroundColor: "#ea580c",
+  },
+  addButtonContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  addButtonIcon: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "bold",
+    marginRight: 8,
+  },
+  addButtonText: {
+    color: "#fff",
+    fontWeight: "500",
+  },
+  tableContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 8,
     overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
   },
-  sheetContent: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+  emptyState: {
+    padding: 24,
+    alignItems: "center",
   },
-  sheetSizeText: {
-    fontSize: 10,
+  emptyStateIconContainer: {
+    marginBottom: 12,
+  },
+  emptyStateIcon: {
+    fontSize: 32,
+  },
+  emptyStateText: {
+    fontSize: 16,
+    fontWeight: "500",
+    color: "#334155",
+    marginBottom: 4,
+  },
+  emptyStateSubtext: {
+    fontSize: 14,
+    color: "#64748b",
+  },
+  tableHeader: {
+    flexDirection: "row",
+    backgroundColor: "#f1f5f9",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  tableHeaderText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#64748b",
+    textTransform: "uppercase",
+  },
+  tableRow: {
+    flexDirection: "row",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f5f9",
+  },
+  tableCell: {
+    flex: 1,
+    justifyContent: "center",
+  },
+  tableCellText: {
+    fontSize: 14,
+    color: "#334155",
+  },
+  stockBadge: {
+    backgroundColor: "#e0f2fe",
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    alignSelf: "flex-start",
+  },
+  stockBadgeText: {
+    color: "#0369a1",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  quantityBadge: {
+    backgroundColor: "#dcfce7",
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    alignSelf: "flex-start",
+  },
+  quantityBadgeText: {
+    color: "#166534",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  deleteButtonPressed: {
+    opacity: 0.6,
+  },
+  deleteButtonIcon: {
+    fontSize: 16,
+  },
+  actionButtons: {
+    flexDirection: "row",
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  optimizeButton: {
+    flex: 1,
+    backgroundColor: "#ea580c",
+    borderRadius: 6,
+    padding: 12,
+    marginRight: 8,
+  },
+  optimizeButtonPressed: {
+    backgroundColor: "#2563eb",
+  },
+  buttonDisabled: {
+    backgroundColor: "#9ca3af",
+  },
+  resetButton: {
+    flex: 1,
+    backgroundColor: "#e2e8f0",
+    borderRadius: 6,
+    padding: 12,
+  },
+  resetButtonPressed: {
+    backgroundColor: "#cbd5e1",
+  },
+  buttonContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  optimizeButtonIcon: {
+    color: "#fff",
+    marginRight: 8,
+  },
+  optimizeButtonText: {
+    color: "#fff",
+    fontWeight: "500",
+  },
+  resetButtonIcon: {
+    marginRight: 8,
+  },
+  resetButtonText: {
+    fontWeight: "500",
+    color: "#334155",
+  },
+  resultsSection: {
+    padding: 16,
+  },
+  resultsHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  resultsSectionTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#1e293b",
+  },
+  successBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  summarySection: {
+    backgroundColor: "#fff",
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#1e293b",
+    marginBottom: 12,
+  },
+  summaryRow: {
+    flexDirection: "row",
+    paddingVertical: 8,
+  },
+  summaryHeader: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#e2e8f0",
+    marginBottom: 4,
+  },
+  summaryHeaderText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#64748b",
+  },
+  summaryLabel: {
+    flex: 2,
+    fontSize: 14,
+    color: "#334155",
+  },
+  summaryValue: {
+    flex: 1,
+    fontSize: 14,
+    color: "#334155",
+    fontWeight: "500",
+    textAlign: "right",
+  },
+  summaryQty: {
+    flex: 1,
+    fontSize: 14,
+    color: "#334155",
+    textAlign: "right",
+  },
+  summaryTotalRow: {
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
+    marginTop: 8,
+    paddingTop: 12,
+  },
+  metricsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginHorizontal: -8,
+    marginBottom: 16,
+  },
+  metricCard: {
+    width: "50%",
+    padding: 8,
+  },
+  metricLabel: {
+    fontSize: 12,
     color: "#64748b",
     marginBottom: 4,
   },
-  cutInfo: {
-    marginBottom: 4,
-  },
-  cutName: {
-    fontSize: 10,
+  metricValue: {
+    fontSize: 14,
     fontWeight: "500",
     color: "#1e293b",
   },
-  cutDetails: {
+  layoutCard: {
+    backgroundColor: "#fff",
+    borderRadius: 8,
+    padding: 16,
+    marginBottom: 16,
+  },
+  layoutId: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#1e293b",
+    marginBottom: 4,
+  },
+  layoutInfo: {
+    fontSize: 14,
+    color: "#64748b",
+    marginBottom: 12,
+  },
+  sheetVisual: {
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    marginVertical: 12,
+    backgroundColor: "#f8fafc",
+    position: "relative",
+    minHeight: 100,
+  },
+  cutVisual: {
+    position: "absolute",
+    borderWidth: 1,
+    borderColor: "#94a3b8",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  cutVisualText: {
     fontSize: 10,
+    color: "#1e293b",
+    fontWeight: "500",
+  },
+  cutList: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginTop: 8,
+  },
+  cutListItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginRight: 16,
+    marginBottom: 8,
+  },
+  cutListSize: {
+    fontSize: 14,
+    color: "#334155",
+    marginRight: 4,
+  },
+  cutListQty: {
+    fontSize: 12,
     color: "#64748b",
   },
-  sheetEfficiency: {
-    position: "absolute",
-    bottom: 4,
-    right: 4,
-    fontSize: 10,
-    color: "#3b82f6",
-    fontWeight: "600",
-    backgroundColor: "rgba(255,255,255,0.9)",
-    paddingHorizontal: 4,
-    borderRadius: 2,
-  },
-  sheetStats: {
+  layoutFooter: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginTop: 4,
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#e2e8f0",
   },
-  sheetStat: {
+  footerText: {
     fontSize: 12,
     color: "#64748b",
   },
 });
+// const styles = StyleSheet.create({
+//   headerContainer: {
+//     paddingBottom: 15,
+//   },
+//   headerBackground: {
+//     backgroundColor: "#f8f9fa",
+//     paddingTop: 60,
+//     paddingBottom: 30,
+//     borderBottomLeftRadius: 25,
+//     borderBottomRightRadius: 25,
+//     overflow: "hidden",
+//     position: "relative",
+//     alignItems: "center",
+//     justifyContent: "center",
+//   },
+//   logo: {
+//     width: 300,
+//     height: 40,
+//   },
+//   sharelogo: {
+//     width: 50,
+//     height: 40,
+//     backgroundColor: "#f8f9fa",
+//   },
 
-export default ThreeDOptimizer;
+//   titleContainer: {
+//     alignItems: "center",
+//     position: "relative",
+//     zIndex: 2,
+//   },
+//   titleMain: {},
+
+//   tabContainer: {
+//     flexDirection: "row",
+//     backgroundColor: "#fff",
+//     marginHorizontal: 20,
+//     marginTop: -20,
+//     borderRadius: 15,
+//     elevation: 8,
+//     shadowColor: "#f97316",
+//     shadowOffset: { width: 0, height: 4 },
+//     shadowOpacity: 0.15,
+//     shadowRadius: 10,
+//     overflow: "hidden",
+//   },
+//   tab: {
+//     flex: 1,
+//     paddingVertical: 16,
+//     alignItems: "center",
+//     backgroundColor: "transparent",
+//     position: "relative",
+//   },
+//   tabActive: {
+//     backgroundColor: "#f97316",
+//   },
+//   tabPressed: {
+//     opacity: 0.8,
+//     transform: [{ scale: 0.98 }],
+//   },
+//   tabContent: {
+//     alignItems: "center",
+//     flexDirection: "row",
+//     gap: 8,
+//   },
+//   tabIcon: {
+//     marginBottom: 2,
+//   },
+//   tabtext: {
+//     color: "#f97316",
+//     fontSize: 14,
+//     fontWeight: "600",
+//     letterSpacing: 0.3,
+//   },
+//   tabtextActive: {
+//     color: "#fff",
+//     fontWeight: "700",
+//   },
+//   activeIndicator: {
+//     position: "absolute",
+//     bottom: 0,
+//     width: "40%",
+//     height: 3,
+//     backgroundColor: "#fff",
+//     borderRadius: 2,
+//   },
+//   section: {
+//     marginTop: 20,
+//     paddingHorizontal: 16,
+//   },
+//   inputCard: {
+//     backgroundColor: "#fff",
+//     borderRadius: 12,
+//     padding: 16,
+//     marginBottom: 20,
+//     shadowColor: "#000",
+//     shadowOffset: { width: 0, height: 2 },
+//     shadowOpacity: 0.05,
+//     shadowRadius: 8,
+//     elevation: 2,
+//   },
+//   inputRow: {
+//     flexDirection: "row",
+//     gap: 12,
+//     marginBottom: 16,
+//   },
+//   inputGroup: {
+//     flex: 1,
+//   },
+//   inputLabel: {
+//     fontSize: 14,
+//     fontWeight: "600",
+//     color: "#4b5563",
+//     marginBottom: 6,
+//   },
+//   inputWrapper: {
+//     flexDirection: "row",
+//     alignItems: "center",
+//     // borderWidth: 1,
+//     // borderColor: "#e5e7eb",
+//     // borderRadius: 8,
+//     overflow: "hidden",
+//   },
+//   input: {
+//     flex: 1,
+//     paddingVertical: 10,
+//     paddingHorizontal: 12,
+//     fontSize: 16,
+//     borderWidth: 1,
+//     borderColor: "#e5e7eb",
+//     borderRadius: 8,
+//     color: "#1f2937",
+//     backgroundColor: "#f9fafb",
+//   },
+//   inputUnit: {
+//     paddingHorizontal: 12,
+//     fontSize: 14,
+//     color: "#6b7280",
+//     backgroundColor: "#f3f4f6",
+//   },
+//   addButton: {
+//     backgroundColor: "#f97316",
+//     borderRadius: 8,
+//     paddingVertical: 12,
+//   },
+//   addButtonPressed: {
+//     opacity: 0.9,
+//     transform: [{ scale: 0.98 }],
+//   },
+//   addButtonContent: {
+//     flexDirection: "row",
+//     justifyContent: "center",
+//     alignItems: "center",
+//     gap: 8,
+//   },
+//   addButtonIcon: {
+//     color: "#fff",
+//     fontSize: 18,
+//     fontWeight: "bold",
+//   },
+//   addButtonText: {
+//     color: "#fff",
+//     fontSize: 16,
+//     fontWeight: "600",
+//   },
+//   tableContainer: {
+//     backgroundColor: "#fff",
+//     borderRadius: 12,
+//     overflow: "hidden",
+//     shadowColor: "#000",
+//     shadowOffset: { width: 0, height: 2 },
+//     shadowOpacity: 0.05,
+//     shadowRadius: 8,
+//     elevation: 2,
+//   },
+//   tableHeader: {
+//     flexDirection: "row",
+//     backgroundColor: "#f9fafb",
+//     paddingVertical: 12,
+//     borderBottomWidth: 1,
+//     borderBottomColor: "#e5e7eb",
+//   },
+//   tableHeaderText: {
+//     flex: 1,
+//     textAlign: "center",
+//     fontWeight: "600",
+//     color: "#4b5563",
+//     fontSize: 14,
+//   },
+//   tableRow: {
+//     flexDirection: "row",
+//     paddingVertical: 14,
+//     borderBottomWidth: 1,
+//     borderBottomColor: "#f3f4f6",
+//   },
+//   tableCell: {
+//     flex: 1,
+//     justifyContent: "center",
+//     alignItems: "center",
+//   },
+//   tableCellText: {
+//     fontSize: 15,
+//     color: "#1f2937",
+//     fontWeight: "500",
+//   },
+//   stockBadge: {
+//     backgroundColor: "#d1fae5",
+//     paddingHorizontal: 10,
+//     paddingVertical: 4,
+//     borderRadius: 12,
+//     minWidth: 40,
+//   },
+//   lowStockBadge: {
+//     backgroundColor: "#fee2e2",
+//   },
+//   stockBadgeText: {
+//     color: "#065f46",
+//     fontWeight: "600",
+//     textAlign: "center",
+//   },
+//   deleteButton: {
+//     backgroundColor: "#fee2e2",
+//     width: 32,
+//     height: 32,
+//     borderRadius: 16,
+//     justifyContent: "center",
+//     alignItems: "center",
+//   },
+//   deleteButtonPressed: {
+//     transform: [{ scale: 0.9 }],
+//   },
+//   deleteButtonIcon: {
+//     color: "#dc2626",
+//     fontSize: 16,
+//     fontWeight: "bold",
+//   },
+//   emptyState: {
+//     paddingVertical: 40,
+//     justifyContent: "center",
+//     alignItems: "center",
+//   },
+//   emptyStateIconContainer: {
+//     backgroundColor: "#f3f4f6",
+//     width: 60,
+//     height: 60,
+//     borderRadius: 30,
+//     justifyContent: "center",
+//     alignItems: "center",
+//     marginBottom: 12,
+//   },
+//   emptyStateIcon: {
+//     fontSize: 28,
+//   },
+//   emptyStateText: {
+//     fontSize: 16,
+//     fontWeight: "600",
+//     color: "#1f2937",
+//     marginBottom: 4,
+//   },
+//   emptyStateSubtext: {
+//     fontSize: 14,
+//     color: "#6b7280",
+//     textAlign: "center",
+//     paddingHorizontal: 40,
+//   },
+
+//   actionButtons: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     marginTop: 24,
+//     marginBottom: 10,
+//     marginHorizontal: 16,
+//     gap: 16,
+//   },
+//   buttonContent: {
+//     flexDirection: "row",
+//     alignItems: "center",
+//     justifyContent: "center",
+//     gap: 8,
+//   },
+//   optimizeButton: {
+//     flex: 1,
+//     backgroundColor: "#f97316",
+//     paddingVertical: 16,
+//     borderRadius: 12,
+//     alignItems: "center",
+//     justifyContent: "center",
+//     elevation: 3,
+//     shadowColor: "#f97316",
+//     shadowOffset: { width: 0, height: 2 },
+//     shadowOpacity: 0.3,
+//     shadowRadius: 4,
+//   },
+//   optimizeButtonPressed: {
+//     opacity: 0.9,
+//     transform: [{ scale: 0.98 }],
+//   },
+//   buttonDisabled: {
+//     backgroundColor: "#9ca3af",
+//     shadowColor: "#6b7280",
+//     opacity: 0.7,
+//   },
+//   optimizeButtonText: {
+//     color: "#fff",
+//     fontSize: 16,
+//     fontWeight: "600",
+//   },
+//   optimizeButtonIcon: {
+//     fontSize: 18,
+//   },
+//   resetButton: {
+//     flex: 1,
+//     backgroundColor: "#fff",
+//     paddingVertical: 16,
+//     borderRadius: 12,
+//     borderWidth: 1,
+//     borderColor: "#e5e7eb",
+//     alignItems: "center",
+//     paddingBottom: 16,
+//     justifyContent: "center",
+//   },
+//   resetButtonPressed: {
+//     backgroundColor: "#f3f4f6",
+//     transform: [{ scale: 0.98 }],
+//   },
+//   resetButtonText: {
+//     color: "#4b5563",
+//     fontSize: 16,
+//     fontWeight: "600",
+//   },
+//   resetButtonIcon: {
+//     fontSize: 18,
+//     color: "#4b5563",
+//   },
+//   resultsSection: {
+//     marginTop: 24,
+//     paddingHorizontal: 16,
+//   },
+//   resultsHeader: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     alignItems: "center",
+//     marginBottom: 16,
+//   },
+//   resultsSectionTitle: {
+//     fontSize: 20,
+//     fontWeight: "700",
+//     color: "#1f2937",
+//   },
+
+//   successBadge: {
+//     paddingVertical: 10,
+//     paddingHorizontal: 24,
+//     flexDirection: "row",
+//     alignItems: "center",
+//     alignSelf: "center", // Centered button
+//   },
+//   successBadgeText: {
+//     // color: "#fff",
+//     fontWeight: "bold",
+//     fontSize: 16,
+//   },
+//   shareIcon: {
+//     marginRight: 8,
+//     fontSize: 16,
+//     color: "#fff",
+//   },
+
+//   statsContainer: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     marginBottom: 20,
+//   },
+//   statCard: {
+//     backgroundColor: "#fff",
+//     borderRadius: 12,
+//     padding: 16,
+//     flex: 1,
+//     marginHorizontal: 4,
+//     alignItems: "center",
+//     elevation: 2,
+//     shadowColor: "#000",
+//     shadowOffset: { width: 0, height: 2 },
+//     shadowOpacity: 0.1,
+//     shadowRadius: 4,
+//   },
+//   statNumber: {
+//     fontSize: 20,
+//     fontWeight: "700",
+//     color: "#f97316",
+//     marginBottom: 4,
+//   },
+//   statLabel: {
+//     fontSize: 14,
+//     color: "#6b7280",
+//   },
+//   resultsTable: {
+//     backgroundColor: "#fff",
+//     borderRadius: 12,
+//     overflow: "hidden",
+//     elevation: 2,
+//     marginHorizontal: 4,
+//     marginBottom: 24,
+//     shadowColor: "#000",
+//     shadowOffset: { width: 0, height: 2 },
+//     shadowOpacity: 0.1,
+//     shadowRadius: 4,
+//   },
+//   tableHeaderRow: {
+//     flexDirection: "row",
+//     backgroundColor: "#f9fafb",
+//     paddingVertical: 14,
+//     paddingHorizontal: 12,
+//     borderBottomWidth: 1,
+//     borderBottomColor: "#e5e7eb",
+//   },
+//   headerText: {
+//     fontWeight: "600",
+//     color: "#4b5563",
+//     fontSize: 14,
+//     textAlign: "center",
+//     flex: 1,
+//   },
+
+//   evenRow: {
+//     backgroundColor: "#f9fafb",
+//   },
+//   quantityBadge: {
+//     backgroundColor: "#dbeafe",
+//     paddingHorizontal: 10,
+//     paddingVertical: 4,
+//     borderRadius: 12,
+//     minWidth: 32,
+//   },
+//   pipeSizeText: {
+//     fontWeight: "600",
+//     color: "#1f2937",
+//   },
+//   cutsContainer: {
+//     flexDirection: "row",
+//     flexWrap: "wrap",
+//     justifyContent: "center",
+//     gap: 6,
+//   },
+//   cutPill: {
+//     backgroundColor: "#e5e7eb",
+//     paddingHorizontal: 8,
+//     paddingVertical: 4,
+//     borderRadius: 12,
+//   },
+//   cutText: {
+//     fontSize: 12,
+//     fontWeight: "500",
+//     color: "#1f2937",
+//   },
+
+//   quantityText: {
+//     color: "#1e40af",
+//     fontWeight: "600",
+//     textAlign: "center",
+//   },
+//   quantityBadgeText: {
+//     color: "#1e40af",
+//     fontWeight: "600",
+//     textAlign: "center",
+//   },
+//   wasteText: {
+//     fontWeight: "500",
+//     color: "#dc2626",
+//   },
+//   totalRow: {
+//     flexDirection: "row",
+//     backgroundColor: "#f3f4f6",
+//     paddingVertical: 14,
+//     paddingHorizontal: 12,
+//   },
+//   totalText: {
+//     fontWeight: "700",
+//     color: "#1f2937",
+//     textAlign: "center",
+//     flex: 1,
+//   },
+//   safe: {
+//     flex: 1,
+//     backgroundColor: "#f8fafc",
+//   },
+
+//   subtitle: {
+//     fontSize: 16,
+//     color: "#bfdbfe",
+//     textAlign: "center",
+//     fontWeight: "500",
+//   },
+
+//   header: {
+//     paddingTop: 50,
+//     paddingBottom: 25,
+//     paddingHorizontal: 20,
+//     borderBottomLeftRadius: 25,
+//     borderBottomRightRadius: 25,
+//     shadowColor: "#000",
+//     shadowOffset: { width: 0, height: 4 },
+//     shadowOpacity: 0.1,
+//     shadowRadius: 10,
+//   },
+//   title: {
+//     fontSize: 28,
+//     fontWeight: "800",
+//     color: "#fff",
+//     textAlign: "center",
+//     textShadowColor: "rgba(0,0,0,0.1)",
+//     textShadowOffset: { width: 0, height: 2 },
+//     textShadowRadius: 4,
+//     letterSpacing: 0.5,
+//   },
+
+//   scrollView: {
+//     flex: 1,
+//     marginTop: 20,
+//   },
+
+//   sectionSubtitle: {
+//     fontSize: 16,
+//     color: "#64748b",
+//     marginBottom: 20,
+//   },
+
+//   // Summary Table Styles
+//   summaryTable: {
+//     borderRadius: 16,
+//     overflow: "hidden",
+//     shadowRadius: 8,
+//   },
+
+//   summaryCell: {
+//     flex: 1,
+//     alignItems: "center",
+//   },
+//   summaryCellText: {
+//     fontSize: 14,
+//     fontWeight: "600",
+//     textAlign: "center",
+//   },
+//   wasteCellText: {
+//     fontSize: 14,
+//     fontWeight: "600",
+//     color: "#ef4444",
+//     textAlign: "center",
+//   },
+
+//   totalCellText: {
+//     fontSize: 16,
+//     fontWeight: "800",
+//     color: "#1e293b",
+//     textAlign: "center",
+//   },
+//   totalWasteCellText: {
+//     fontSize: 16,
+//     fontWeight: "800",
+//     color: "#ef4444",
+//     textAlign: "center",
+//   },
+
+//   metricsGrid: {
+//     flexDirection: "row",
+//     flexWrap: "wrap",
+//     justifyContent: "space-between",
+//     marginBottom: 16,
+//   },
+//   metricCard: {
+//     width: "48%",
+//     // backgroundColor: "#fef3c7", // Soft warm background
+//     padding: 12,
+//     borderRadius: 10,
+//     marginBottom: 10,
+//     borderColor: "#fcd34d",
+//     borderWidth: 1,
+//   },
+//   metricValue: {
+//     fontSize: 16,
+//     fontWeight: "700",
+//     color: "#f97316",
+//   },
+//   metricLabel: {
+//     fontSize: 12,
+//     color: "#6b7280",
+//   },
+
+//   layoutCard: {
+//     padding: 12,
+//     borderWidth: 1,
+//     borderColor: "#e5e7eb",
+//     borderRadius: 10,
+//     marginBottom: 16,
+//     // backgroundColor: "#fff", // Clean white background
+//   },
+//   layoutId: {
+//     fontWeight: "bold",
+//     marginBottom: 4,
+//     color: "#111827",
+//   },
+//   layoutInfo: {
+//     fontSize: 14,
+//     color: "#f97316",
+//     marginBottom: 8,
+//   },
+
+//   cutRow: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     paddingVertical: 2,
+//   },
+//   cutLabel: {
+//     fontSize: 14,
+//     color: "#374151",
+//   },
+//   cutQty: {
+//     fontWeight: "600",
+//     color: "#f97316", // Orange emphasis
+//   },
+
+//   cutBar: {
+//     flexDirection: "row",
+//     marginVertical: 8,
+//     flexWrap: "wrap",
+//   },
+//   cutBlock: {
+//     backgroundColor: "#f97316", // Highlight color
+//     paddingVertical: 4,
+//     paddingHorizontal: 6,
+//     borderRadius: 4,
+//     margin: 2,
+//   },
+//   cutBlockText: {
+//     fontSize: 12,
+//     color: "#fff",
+//   },
+
+//   layoutFooter: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     marginTop: 8,
+//   },
+//   footerText: {
+//     fontSize: 12,
+//     color: "#6b7280",
+//   },
+
+//   summarySection: {
+//     marginBottom: 16,
+//     padding: 10,
+//     backgroundColor: "#fff",
+//     borderRadius: 8,
+//     borderWidth: 1,
+//     borderColor: "#e5e7eb",
+//   },
+
+//   sectionTitle: {
+//     fontSize: 16,
+//     fontWeight: "700",
+//     color: "#111827",
+//     marginBottom: 8,
+//   },
+
+//   summaryHeader: {
+//     flexDirection: "row",
+//     paddingVertical: 6,
+//     backgroundColor: "#f9fafb",
+//     borderBottomWidth: 1,
+//   },
+
+//   summaryHeaderText: {
+//     width: "33.33%",
+//     fontSize: 14,
+//     fontWeight: "600",
+//     color: "#6b7280",
+//     textAlign: "center",
+//   },
+
+//   summaryRow: {
+//     flexDirection: "row",
+//     alignItems: "center",
+//     paddingVertical: 6,
+//     borderColor: "#f3f4f6",
+//   },
+
+//   summaryLabel: {
+//     width: "33.33%",
+//     fontSize: 14,
+//     color: "#374151",
+//     textAlign: "left",
+//     paddingLeft: 4,
+//   },
+
+//   summaryValue: {
+//     width: "33.33%",
+//     fontSize: 14,
+//     color: "#111827",
+//     textAlign: "center",
+//   },
+
+//   summaryQty: {
+//     width: "33.33%",
+//     fontSize: 14,
+//     fontWeight: "600",
+//     color: "#f97316",
+//     textAlign: "right",
+//     paddingRight: 4,
+//   },
+
+//   summaryTotalRow: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     borderTopWidth: 1,
+//     borderColor: "#e5e7eb",
+//     marginTop: 6,
+//     paddingTop: 8,
+//   },
+// });
