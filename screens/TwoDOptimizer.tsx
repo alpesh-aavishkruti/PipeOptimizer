@@ -15,6 +15,7 @@ import {
   Image,
   TouchableOpacity,
   Alert,
+  ActivityIndicator,
 } from "react-native";
 import Svg, { Path } from "react-native-svg";
 import { MaterialIcons } from "@expo/vector-icons";
@@ -171,10 +172,12 @@ export default function TwoDOptimizer({ navigation }: any) {
       setUncutCount(totalNeeded - totalCut);
     } catch (error) {
       console.error("API Error:", error);
+      Alert.alert("Error", "Failed to optimize cuts. Please try again.");
     } finally {
       setIsLoading(false);
     }
   };
+
   const resetAll = (): void => {
     setOrderPieces([]);
     setLengthInput("");
@@ -195,14 +198,21 @@ export default function TwoDOptimizer({ navigation }: any) {
     setOrderPieces(orderPieces.filter((_, index) => index !== indexToRemove));
   };
 
+  //@ts-ignore
   const viewRef = useRef();
 
-  const getCutCounts = (cuts: any) => {
-    return cuts.reduce((acc: any, cut: any) => {
-      acc[cut] = (acc[cut] || 0) + 1;
-      return acc;
-    }, {});
-  };
+  // Loading Overlay Component
+  const LoadingOverlay = () => (
+    <View style={styles.loadingOverlay}>
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#f97316" />
+        <Text style={styles.loadingText}>Optimizing cuts...</Text>
+        <Text style={styles.loadingSubtext}>
+          Please wait while we calculate the best cutting patterns
+        </Text>
+      </View>
+    </View>
+  );
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -305,6 +315,7 @@ export default function TwoDOptimizer({ navigation }: any) {
       <ScrollView
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
+        scrollEnabled={!isLoading}
       >
         {activeTab === "pipes" && (
           <View style={styles.section}>
@@ -321,6 +332,7 @@ export default function TwoDOptimizer({ navigation }: any) {
                       value={pipeSizeInput}
                       keyboardType="numeric"
                       onChangeText={setPipeSizeInput}
+                      editable={!isLoading}
                     />
                   </View>
                 </View>
@@ -334,6 +346,7 @@ export default function TwoDOptimizer({ navigation }: any) {
                     value={stockInput}
                     keyboardType="numeric"
                     onChangeText={setStockInput}
+                    editable={!isLoading}
                   />
                 </View>
               </View>
@@ -342,16 +355,19 @@ export default function TwoDOptimizer({ navigation }: any) {
                 style={({ pressed }) => [
                   styles.addButton,
                   pressed && styles.addButtonPressed,
+                  isLoading && styles.buttonDisabled,
                 ]}
                 onPress={() => {
+                  if (isLoading) return;
+
                   Keyboard.dismiss();
                   const size = parseInt(pipeSizeInput.trim());
                   const stock = parseInt(stockInput.trim());
 
                   if (!isNaN(size) && !isNaN(stock) && size > 0 && stock > 0) {
-                    setAvailablePipes((prev) => {
+                    setAvailablePipes((prev: any) => {
                       const existingIndex = prev.findIndex(
-                        (p) => p.size === size
+                        (p: any) => p.size === size
                       );
                       if (existingIndex !== -1) {
                         // Pipe size already exists – update stock
@@ -368,6 +384,7 @@ export default function TwoDOptimizer({ navigation }: any) {
                     setStockInput("");
                   }
                 }}
+                disabled={isLoading}
               >
                 <View style={styles.addButtonContent}>
                   <Text style={styles.addButtonIcon}>+</Text>
@@ -417,8 +434,10 @@ export default function TwoDOptimizer({ navigation }: any) {
                           style={({ pressed }) => [
                             // styles.deleteButton,
                             pressed && styles.deleteButtonPressed,
+                            isLoading && styles.buttonDisabled,
                           ]}
-                          onPress={() => removePipe(pipe.size)}
+                          onPress={() => !isLoading && removePipe(pipe.size)}
+                          disabled={isLoading}
                         >
                           <Text style={styles.deleteButtonIcon}>🗑️</Text>
                         </Pressable>
@@ -446,6 +465,7 @@ export default function TwoDOptimizer({ navigation }: any) {
                       value={lengthInput}
                       keyboardType="numeric"
                       onChangeText={setLengthInput}
+                      editable={!isLoading}
                     />
                   </View>
                 </View>
@@ -459,6 +479,7 @@ export default function TwoDOptimizer({ navigation }: any) {
                     value={quantityInput}
                     keyboardType="numeric"
                     onChangeText={setQuantityInput}
+                    editable={!isLoading}
                   />
                 </View>
               </View>
@@ -467,8 +488,11 @@ export default function TwoDOptimizer({ navigation }: any) {
                 style={({ pressed }) => [
                   styles.addButton,
                   pressed && styles.addButtonPressed,
+                  isLoading && styles.buttonDisabled,
                 ]}
                 onPress={() => {
+                  if (isLoading) return;
+
                   const length = parseInt(lengthInput);
                   const quantity = parseInt(quantityInput);
                   if (
@@ -482,6 +506,7 @@ export default function TwoDOptimizer({ navigation }: any) {
                     setQuantityInput("");
                   }
                 }}
+                disabled={isLoading}
               >
                 <View style={styles.addButtonContent}>
                   <Text style={styles.addButtonIcon}>+</Text>
@@ -533,8 +558,10 @@ export default function TwoDOptimizer({ navigation }: any) {
                           style={({ pressed }) => [
                             // styles.deleteButton,
                             pressed && styles.deleteButtonPressed,
+                            isLoading && styles.buttonDisabled,
                           ]}
-                          onPress={() => removeOrderPiece(index)}
+                          onPress={() => !isLoading && removeOrderPiece(index)}
+                          disabled={isLoading}
                         >
                           <Text style={styles.deleteButtonIcon}>🗑️</Text>
                         </Pressable>
@@ -553,19 +580,26 @@ export default function TwoDOptimizer({ navigation }: any) {
             <Pressable
               style={({ pressed }) => [
                 styles.optimizeButton,
-                orderPieces.length === 0 && styles.buttonDisabled,
+                (orderPieces.length === 0 || isLoading) &&
+                  styles.buttonDisabled,
                 pressed && styles.optimizeButtonPressed,
               ]}
               onPress={optimizePipes}
-              disabled={orderPieces.length === 0}
+              disabled={orderPieces.length === 0 || isLoading}
               android_ripple={{
                 color: "rgba(255,255,255,0.3)",
                 borderless: false,
               }}
             >
               <View style={styles.buttonContent}>
-                <Text style={styles.optimizeButtonIcon}>✂️</Text>
-                <Text style={styles.optimizeButtonText}>Optimize Cuts</Text>
+                {isLoading ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.optimizeButtonIcon}>✂️</Text>
+                )}
+                <Text style={styles.optimizeButtonText}>
+                  {isLoading ? "Optimizing..." : "Optimize Cuts"}
+                </Text>
               </View>
             </Pressable>
           )}
@@ -574,8 +608,10 @@ export default function TwoDOptimizer({ navigation }: any) {
             style={({ pressed }) => [
               styles.resetButton,
               pressed && styles.resetButtonPressed,
+              isLoading && styles.buttonDisabled,
             ]}
             onPress={resetAll}
+            disabled={isLoading}
             android_ripple={{ color: "rgba(0,0,0,0.1)", borderless: false }}
           >
             <View style={styles.buttonContent}>
@@ -612,7 +648,8 @@ export default function TwoDOptimizer({ navigation }: any) {
                 </View>
               </TouchableOpacity>
             </View>
-            <View
+            <View 
+            //@ts-ignore
               ref={viewRef}
               collapsable={false}
               style={{
@@ -695,7 +732,8 @@ export default function TwoDOptimizer({ navigation }: any) {
               </View>
 
               {/* Cutting Layouts */}
-              {rawOptimizationData?.cutting_patterns?.map((pattern, idx) => (
+              //@ts-ignore
+              {rawOptimizationData?.cutting_patterns?.map((pattern:any, idx:any) => (
                 <View key={idx} style={styles.layoutCard}>
                   <Text style={styles.layoutId}>Layout ID {idx + 1}</Text>
 
@@ -733,10 +771,12 @@ export default function TwoDOptimizer({ navigation }: any) {
           </View>
         )}
       </ScrollView>
+
+      {/* Loading Overlay */}
+      {isLoading && <LoadingOverlay />}
     </SafeAreaView>
   );
 }
-
 const MetricCard = ({ label, value }: any) => (
   <View style={styles.metricCard}>
     <Text style={styles.metricValue}>{value}</Text>
@@ -809,6 +849,44 @@ const styles = StyleSheet.create({
   },
   tabIcon: {
     marginBottom: 2,
+  },
+  loadingOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    zIndex: 1000,
+  },
+  loadingContainer: {
+    backgroundColor: "#fff",
+    padding: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+    width: "100%",
+    maxWidth: 300,
+  },
+  loadingText: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#1f2937",
+    marginTop: 15,
+    marginBottom: 5,
+  },
+  loadingSubtext: {
+    fontSize: 14,
+    color: "#6b7280",
+    textAlign: "center",
+    lineHeight: 20,
   },
   tabtext: {
     color: "#f97316",

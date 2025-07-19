@@ -27,7 +27,7 @@
     },
  
     "extra": {
-          "API_BASE_URL": "http://192.168.1.18:1234",
+          "API_BASE_URL": "http://192.168.1.9:1234",
       "API_KEY": "api_key_12345",
       "eas": {
         "projectId": "a75afcdf-ce95-472a-a7a4-0ad5f429414a"
