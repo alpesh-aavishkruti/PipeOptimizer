@@ -131,18 +131,54 @@ export default function TwoDOptimizer({ navigation }: any) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const data = await response.json();
-      setRawOptimizationData(data);
-      console.log("API Response Data:", data);
+      const responseData = await response.json();
+      console.log("API Response Data:", responseData);
+
+      // Handle validation errors from backend
+      if (!responseData.success) {
+        // Clear any previous optimization data
+        setRawOptimizationData(null);
+        setOptimized([]);
+
+        // Show only the backend error message
+        if (
+          responseData.error === "VALIDATION_ERROR" &&
+          responseData.details?.insufficient_stock
+        ) {
+          Alert.alert(
+            "Insufficient Stock",
+            responseData.details.insufficient_stock[0]
+          );
+        } else {
+          Alert.alert(
+            "Error",
+            responseData.message || "An error occurred during optimization."
+          );
+        }
+        return;
+      }
+
+      // Set raw data only for successful responses
+      setRawOptimizationData(responseData.data);
+
+      // Check if data exists and is valid
+      if (!responseData.data) {
+        console.error("No data in successful response:", responseData);
+        Alert.alert("Error", "No optimization data received from server.");
+        return;
+      }
 
       let optimizedResult: OptimizedPipe[] = [];
-      console.log(data, "datata");
+
+      // Handle successful response with cutting patterns
+      const apiData = responseData.data;
+
       if (
-        data &&
-        typeof data === "object" &&
-        Array.isArray(data.cutting_patterns)
+        apiData &&
+        typeof apiData === "object" &&
+        Array.isArray(apiData.cutting_patterns)
       ) {
-        optimizedResult = data.cutting_patterns.map((pattern: any) => ({
+        optimizedResult = apiData.cutting_patterns.map((pattern: any) => ({
           pipeSize: pattern.parent_width,
           remaining: pattern.waste_per_roll || 0,
           cuts: pattern.cuts || pattern.cut_widths || [],
@@ -153,8 +189,11 @@ export default function TwoDOptimizer({ navigation }: any) {
             100,
         }));
       } else {
-        console.error("Unexpected API response format:", data);
-        throw new Error("Invalid API response format");
+        console.error("Invalid cutting_patterns data:", apiData);
+        console.log("cutting_patterns type:", typeof apiData?.cutting_patterns);
+        console.log("cutting_patterns value:", apiData?.cutting_patterns);
+        Alert.alert("Error", "Invalid optimization data format received.");
+        return;
       }
 
       setOptimized(optimizedResult);
@@ -648,8 +687,8 @@ export default function TwoDOptimizer({ navigation }: any) {
                 </View>
               </TouchableOpacity>
             </View>
-            <View 
-            //@ts-ignore
+            <View
+              //@ts-ignore
               ref={viewRef}
               collapsable={false}
               style={{
@@ -687,12 +726,12 @@ export default function TwoDOptimizer({ navigation }: any) {
                 <View style={[styles.summaryRow, styles.summaryTotalRow]}>
                   <Text style={styles.summaryLabel}>Total Pipes Used</Text>
                   <Text style={styles.summaryValue}></Text>
+                  {/* Uncomment this */}
                   <Text style={styles.summaryQty}>
                     {optimized.reduce((sum, layout) => sum + layout.count, 0)}
                   </Text>
                 </View>
               </View>
-
               {/* Metrics Section */}
               <View style={styles.metricsGrid}>
                 <MetricCard
@@ -730,43 +769,44 @@ export default function TwoDOptimizer({ navigation }: any) {
                   value={`${rawOptimizationData.total_rolls} `}
                 />
               </View>
-
               {/* Cutting Layouts */}
               //@ts-ignore
-              {rawOptimizationData?.cutting_patterns?.map((pattern:any, idx:any) => (
-                <View key={idx} style={styles.layoutCard}>
-                  <Text style={styles.layoutId}>Layout ID {idx + 1}</Text>
+              {rawOptimizationData?.cutting_patterns?.map(
+                (pattern: any, idx: any) => (
+                  <View key={idx} style={styles.layoutCard}>
+                    <Text style={styles.layoutId}>Layout ID {idx + 1}</Text>
 
-                  <Text style={styles.layoutInfo}>
-                    Repetition: x {pattern.usage} | Stock length:{" "}
-                    {pattern.parent_width}"
-                  </Text>
+                    <Text style={styles.layoutInfo}>
+                      Repetition: x {pattern.usage} | Stock length:{" "}
+                      {pattern.parent_width}"
+                    </Text>
 
-                  {/* Bar showing cut blocks */}
-                  <View style={styles.cutBar}>
-                    {pattern.cut_widths.map((width, i) => (
-                      <View key={i} style={styles.cutBlock}>
-                        <Text style={styles.cutBlockText}>
-                          {width}" × {pattern.cuts[i]}
-                        </Text>
-                      </View>
-                    ))}
+                    {/* Bar showing cut blocks */}
+                    <View style={styles.cutBar}>
+                      {pattern.cut_widths.map((width, i) => (
+                        <View key={i} style={styles.cutBlock}>
+                          <Text style={styles.cutBlockText}>
+                            {width}" × {pattern.cuts[i]}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+
+                    {/* Footer Info */}
+                    <View style={styles.layoutFooter}>
+                      <Text style={styles.footerText}>
+                        Cuts: {pattern.cuts.length}
+                      </Text>
+                      <Text style={styles.footerText}>
+                        Remnant: {pattern.waste_per_roll}"
+                      </Text>
+                      <Text style={styles.footerText}>
+                        Total Waste: {pattern.total_waste}"
+                      </Text>
+                    </View>
                   </View>
-
-                  {/* Footer Info */}
-                  <View style={styles.layoutFooter}>
-                    <Text style={styles.footerText}>
-                      Cuts: {pattern.cuts.length}
-                    </Text>
-                    <Text style={styles.footerText}>
-                      Remnant: {pattern.waste_per_roll}"
-                    </Text>
-                    <Text style={styles.footerText}>
-                      Total Waste: {pattern.total_waste}"
-                    </Text>
-                  </View>
-                </View>
-              ))}
+                )
+              )}
             </View>
           </View>
         )}

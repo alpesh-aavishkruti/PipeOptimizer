@@ -3,7 +3,7 @@
     "name": "Aavishkruti",
     "slug": "PipeOptimizerApp",
     "version": "1.0.0",
-    
+
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -12,7 +12,6 @@
       "image": "./assets/icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
-      
     },
     "ios": {
       "supportsTablet": true
@@ -25,9 +24,9 @@
       "edgeToEdgeEnabled": true,
       "package": "com.alpesh8070.PipeOptimizerApp"
     },
- 
+
     "extra": {
-          "API_BASE_URL": "http://192.168.1.9:1234",
+      "API_BASE_URL": "https://unnati-alpha-backend.aavishkruti.com",
       "API_KEY": "api_key_12345",
       "eas": {
         "projectId": "a75afcdf-ce95-472a-a7a4-0ad5f429414a"
