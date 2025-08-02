@@ -158,7 +158,6 @@ export default function TwoDOptimizer({ navigation }: any) {
         return;
       }
 
-      // Set raw data only for successful responses
       setRawOptimizationData(responseData.data);
 
       // Check if data exists and is valid
@@ -261,7 +260,22 @@ export default function TwoDOptimizer({ navigation }: any) {
       <View style={styles.headerContainer}>
         <View style={styles.headerBackground}>
           {/* Decorative elements */}
-
+          <View style={styles.versionContainer}>
+            <Pressable
+              style={styles.versionBadge}
+              onPress={() => {
+                Alert.alert(
+                  "App Version",
+                  "Aavishkruti v2.2.0\nPipe Cutting Optimizer"
+                );
+              }}
+            >
+              <View style={styles.versionContent}>
+                <MaterialIcons name="info-outline" size={12} color="#ffffff" />
+                <Text style={styles.versionText}>v2.0.0</Text>
+              </View>
+            </Pressable>
+          </View>
           <View style={styles.titleContainer}>
             <View>
               {/* Logo from assets */}
@@ -725,7 +739,7 @@ export default function TwoDOptimizer({ navigation }: any) {
                 {/* Total Row */}
                 <View style={[styles.summaryRow, styles.summaryTotalRow]}>
                   <Text style={styles.summaryLabel}>Total Pipes Used</Text>
-                  <Text style={styles.summaryValue}></Text>
+                  {/* <Text style={styles.summaryValue}></Text> */}
                   {/* Uncomment this */}
                   <Text style={styles.summaryQty}>
                     {optimized.reduce((sum, layout) => sum + layout.count, 0)}
@@ -854,6 +868,39 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
   titleMain: {},
+  versionContainer: {
+    position: "absolute",
+    top: 30,
+    right: 20,
+    zIndex: 10,
+  },
+
+  versionBadge: {
+    backgroundColor: "rgba(0, 0, 0, 0.6)", // Semi-transparent black
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.2)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+
+  versionContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
+
+  versionText: {
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: "500",
+    letterSpacing: 0.3,
+  },
 
   tabContainer: {
     flexDirection: "row",

@@ -48,7 +48,6 @@ const call2DOptimizationAPI = async (
   demandList: OrderPiece[]
 ): Promise<OptimizedSheet[]> => {
   try {
-    // Format stock sheets for API - using 'stock' instead of 'stock_sheets'
     const stock = availableSheets.flatMap((sheet) =>
       Array(sheet.stock)
         .fill(0)
@@ -58,7 +57,6 @@ const call2DOptimizationAPI = async (
           id: `sheet_${sheet.length}x${sheet.width}_${i}`,
         }))
     );
-    console.log("stock:", stock);
 
     // Format pieces for API
     const pieces = demandList.flatMap((piece) =>
@@ -74,7 +72,7 @@ const call2DOptimizationAPI = async (
     console.log("pieces:", pieces);
 
     const requestBody = {
-      stock: stock, // Changed from 'stock_sheets' to 'stock'
+      stock: stock, 
       pieces: pieces,
     };
 
@@ -114,25 +112,21 @@ const mapApiResponseToOptimizedSheets = (
 ): OptimizedSheet[] => {
   const optimizedSheets: OptimizedSheet[] = [];
 
-  // Check if the API response has the expected structure
   if (!apiResponse.sheets || !Array.isArray(apiResponse.sheets)) {
     console.error("Invalid API response structure:", apiResponse);
     return optimizedSheets;
   }
 
-  // Group identical sheet layouts
   const layoutGroups: { [key: string]: OptimizedSheet } = {};
 
   apiResponse.sheets.forEach((sheet: any) => {
-    // Extract cuts information from pieces
     const cuts = sheet.pieces.map((piece: any) => ({
       length: piece.h,
       width: piece.w,
-      x: piece.x, // Include x position
-      y: piece.y, // Include y position
+      x: piece.x, 
+      y: piece.y,
     }));
 
-    // Create signature for grouping identical layouts
     const cutsSignature = cuts
       .map((c) => `${c.length}x${c.width}`)
       .sort()
@@ -141,9 +135,8 @@ const mapApiResponseToOptimizedSheets = (
     const signature = `${sheet.size.w}x${sheet.size.h}|${cutsSignature}`;
 
     if (!layoutGroups[signature]) {
-      // Calculate efficiency (used area / total area)
       const usedArea = cuts.reduce(
-        (sum, cut) => sum + cut.length * cut.width,
+        (sum:any, cut:any) => sum + cut.length * cut.width,
         0
       );
       const totalArea = sheet.size.w * sheet.size.h;
@@ -156,7 +149,7 @@ const mapApiResponseToOptimizedSheets = (
         },
         cuts: cuts,
         remaining: {
-          length: 0, // You might want to calculate this based on the layout
+          length: 0,
           width: 0,
         },
         count: 0,
@@ -724,15 +717,15 @@ export default function ThreeDOptimizer() {
                 </View>
 
                 {Object.entries(
-                  optimized.reduce((acc: any, layout) => {
+                  optimized.reduce((acc: Record<string, number>, layout) => {
                     const key = `${layout.sheetSize.length}x${layout.sheetSize.width}`;
                     acc[key] = (acc[key] || 0) + layout.count;
                     return acc;
-                  }, {})
+                  }, {} as Record<string, number>)
                 ).map(([sheetSize, totalCount]) => (
                   <View key={sheetSize} style={styles.summaryRow}>
                     <Text style={styles.summaryLabel}>{sheetSize} inch</Text>
-                    <Text style={styles.summaryQty}>× {totalCount}</Text>
+                    <Text style={styles.summaryQty}>× {totalCount as number}</Text>
                   </View>
                 ))}
 
@@ -799,7 +792,7 @@ export default function ThreeDOptimizer() {
                     },
                   ]}
                 >
-                  {sheet.cuts.map((cut, i) => {
+                  {sheet.cuts.map((cut:any, i) => {
                     const widthPct = (cut.width / sheet.sheetSize.width) * 100;
                     const heightPct =
                       (cut.length / sheet.sheetSize.length) * 100;
@@ -1255,721 +1248,3 @@ const styles = StyleSheet.create({
     color: "#64748b",
   },
 });
-// const styles = StyleSheet.create({
-//   headerContainer: {
-//     paddingBottom: 15,
-//   },
-//   headerBackground: {
-//     backgroundColor: "#f8f9fa",
-//     paddingTop: 60,
-//     paddingBottom: 30,
-//     borderBottomLeftRadius: 25,
-//     borderBottomRightRadius: 25,
-//     overflow: "hidden",
-//     position: "relative",
-//     alignItems: "center",
-//     justifyContent: "center",
-//   },
-//   logo: {
-//     width: 300,
-//     height: 40,
-//   },
-//   sharelogo: {
-//     width: 50,
-//     height: 40,
-//     backgroundColor: "#f8f9fa",
-//   },
-
-//   titleContainer: {
-//     alignItems: "center",
-//     position: "relative",
-//     zIndex: 2,
-//   },
-//   titleMain: {},
-
-//   tabContainer: {
-//     flexDirection: "row",
-//     backgroundColor: "#fff",
-//     marginHorizontal: 20,
-//     marginTop: -20,
-//     borderRadius: 15,
-//     elevation: 8,
-//     shadowColor: "#f97316",
-//     shadowOffset: { width: 0, height: 4 },
-//     shadowOpacity: 0.15,
-//     shadowRadius: 10,
-//     overflow: "hidden",
-//   },
-//   tab: {
-//     flex: 1,
-//     paddingVertical: 16,
-//     alignItems: "center",
-//     backgroundColor: "transparent",
-//     position: "relative",
-//   },
-//   tabActive: {
-//     backgroundColor: "#f97316",
-//   },
-//   tabPressed: {
-//     opacity: 0.8,
-//     transform: [{ scale: 0.98 }],
-//   },
-//   tabContent: {
-//     alignItems: "center",
-//     flexDirection: "row",
-//     gap: 8,
-//   },
-//   tabIcon: {
-//     marginBottom: 2,
-//   },
-//   tabtext: {
-//     color: "#f97316",
-//     fontSize: 14,
-//     fontWeight: "600",
-//     letterSpacing: 0.3,
-//   },
-//   tabtextActive: {
-//     color: "#fff",
-//     fontWeight: "700",
-//   },
-//   activeIndicator: {
-//     position: "absolute",
-//     bottom: 0,
-//     width: "40%",
-//     height: 3,
-//     backgroundColor: "#fff",
-//     borderRadius: 2,
-//   },
-//   section: {
-//     marginTop: 20,
-//     paddingHorizontal: 16,
-//   },
-//   inputCard: {
-//     backgroundColor: "#fff",
-//     borderRadius: 12,
-//     padding: 16,
-//     marginBottom: 20,
-//     shadowColor: "#000",
-//     shadowOffset: { width: 0, height: 2 },
-//     shadowOpacity: 0.05,
-//     shadowRadius: 8,
-//     elevation: 2,
-//   },
-//   inputRow: {
-//     flexDirection: "row",
-//     gap: 12,
-//     marginBottom: 16,
-//   },
-//   inputGroup: {
-//     flex: 1,
-//   },
-//   inputLabel: {
-//     fontSize: 14,
-//     fontWeight: "600",
-//     color: "#4b5563",
-//     marginBottom: 6,
-//   },
-//   inputWrapper: {
-//     flexDirection: "row",
-//     alignItems: "center",
-//     // borderWidth: 1,
-//     // borderColor: "#e5e7eb",
-//     // borderRadius: 8,
-//     overflow: "hidden",
-//   },
-//   input: {
-//     flex: 1,
-//     paddingVertical: 10,
-//     paddingHorizontal: 12,
-//     fontSize: 16,
-//     borderWidth: 1,
-//     borderColor: "#e5e7eb",
-//     borderRadius: 8,
-//     color: "#1f2937",
-//     backgroundColor: "#f9fafb",
-//   },
-//   inputUnit: {
-//     paddingHorizontal: 12,
-//     fontSize: 14,
-//     color: "#6b7280",
-//     backgroundColor: "#f3f4f6",
-//   },
-//   addButton: {
-//     backgroundColor: "#f97316",
-//     borderRadius: 8,
-//     paddingVertical: 12,
-//   },
-//   addButtonPressed: {
-//     opacity: 0.9,
-//     transform: [{ scale: 0.98 }],
-//   },
-//   addButtonContent: {
-//     flexDirection: "row",
-//     justifyContent: "center",
-//     alignItems: "center",
-//     gap: 8,
-//   },
-//   addButtonIcon: {
-//     color: "#fff",
-//     fontSize: 18,
-//     fontWeight: "bold",
-//   },
-//   addButtonText: {
-//     color: "#fff",
-//     fontSize: 16,
-//     fontWeight: "600",
-//   },
-//   tableContainer: {
-//     backgroundColor: "#fff",
-//     borderRadius: 12,
-//     overflow: "hidden",
-//     shadowColor: "#000",
-//     shadowOffset: { width: 0, height: 2 },
-//     shadowOpacity: 0.05,
-//     shadowRadius: 8,
-//     elevation: 2,
-//   },
-//   tableHeader: {
-//     flexDirection: "row",
-//     backgroundColor: "#f9fafb",
-//     paddingVertical: 12,
-//     borderBottomWidth: 1,
-//     borderBottomColor: "#e5e7eb",
-//   },
-//   tableHeaderText: {
-//     flex: 1,
-//     textAlign: "center",
-//     fontWeight: "600",
-//     color: "#4b5563",
-//     fontSize: 14,
-//   },
-//   tableRow: {
-//     flexDirection: "row",
-//     paddingVertical: 14,
-//     borderBottomWidth: 1,
-//     borderBottomColor: "#f3f4f6",
-//   },
-//   tableCell: {
-//     flex: 1,
-//     justifyContent: "center",
-//     alignItems: "center",
-//   },
-//   tableCellText: {
-//     fontSize: 15,
-//     color: "#1f2937",
-//     fontWeight: "500",
-//   },
-//   stockBadge: {
-//     backgroundColor: "#d1fae5",
-//     paddingHorizontal: 10,
-//     paddingVertical: 4,
-//     borderRadius: 12,
-//     minWidth: 40,
-//   },
-//   lowStockBadge: {
-//     backgroundColor: "#fee2e2",
-//   },
-//   stockBadgeText: {
-//     color: "#065f46",
-//     fontWeight: "600",
-//     textAlign: "center",
-//   },
-//   deleteButton: {
-//     backgroundColor: "#fee2e2",
-//     width: 32,
-//     height: 32,
-//     borderRadius: 16,
-//     justifyContent: "center",
-//     alignItems: "center",
-//   },
-//   deleteButtonPressed: {
-//     transform: [{ scale: 0.9 }],
-//   },
-//   deleteButtonIcon: {
-//     color: "#dc2626",
-//     fontSize: 16,
-//     fontWeight: "bold",
-//   },
-//   emptyState: {
-//     paddingVertical: 40,
-//     justifyContent: "center",
-//     alignItems: "center",
-//   },
-//   emptyStateIconContainer: {
-//     backgroundColor: "#f3f4f6",
-//     width: 60,
-//     height: 60,
-//     borderRadius: 30,
-//     justifyContent: "center",
-//     alignItems: "center",
-//     marginBottom: 12,
-//   },
-//   emptyStateIcon: {
-//     fontSize: 28,
-//   },
-//   emptyStateText: {
-//     fontSize: 16,
-//     fontWeight: "600",
-//     color: "#1f2937",
-//     marginBottom: 4,
-//   },
-//   emptyStateSubtext: {
-//     fontSize: 14,
-//     color: "#6b7280",
-//     textAlign: "center",
-//     paddingHorizontal: 40,
-//   },
-
-//   actionButtons: {
-//     flexDirection: "row",
-//     justifyContent: "space-between",
-//     marginTop: 24,
-//     marginBottom: 10,
-//     marginHorizontal: 16,
-//     gap: 16,
-//   },
-//   buttonContent: {
-//     flexDirection: "row",
-//     alignItems: "center",
-//     justifyContent: "center",
-//     gap: 8,
-//   },
-//   optimizeButton: {
-//     flex: 1,
-//     backgroundColor: "#f97316",
-//     paddingVertical: 16,
-//     borderRadius: 12,
-//     alignItems: "center",
-//     justifyContent: "center",
-//     elevation: 3,
-//     shadowColor: "#f97316",
-//     shadowOffset: { width: 0, height: 2 },
-//     shadowOpacity: 0.3,
-//     shadowRadius: 4,
-//   },
-//   optimizeButtonPressed: {
-//     opacity: 0.9,
-//     transform: [{ scale: 0.98 }],
-//   },
-//   buttonDisabled: {
-//     backgroundColor: "#9ca3af",
-//     shadowColor: "#6b7280",
-//     opacity: 0.7,
-//   },
-//   optimizeButtonText: {
-//     color: "#fff",
-//     fontSize: 16,
-//     fontWeight: "600",
-//   },
-//   optimizeButtonIcon: {
-//     fontSize: 18,
-//   },
-//   resetButton: {
-//     flex: 1,
-//     backgroundColor: "#fff",
-//     paddingVertical: 16,
-//     borderRadius: 12,
-//     borderWidth: 1,
-//     borderColor: "#e5e7eb",
-//     alignItems: "center",
-//     paddingBottom: 16,
-//     justifyContent: "center",
-//   },
-//   resetButtonPressed: {
-//     backgroundColor: "#f3f4f6",
-//     transform: [{ scale: 0.98 }],
-//   },
-//   resetButtonText: {
-//     color: "#4b5563",
-//     fontSize: 16,
-//     fontWeight: "600",
-//   },
-//   resetButtonIcon: {
-//     fontSize: 18,
-//     color: "#4b5563",
-//   },
-//   resultsSection: {
-//     marginTop: 24,
-//     paddingHorizontal: 16,
-//   },
-//   resultsHeader: {
-//     flexDirection: "row",
-//     justifyContent: "space-between",
-//     alignItems: "center",
-//     marginBottom: 16,
-//   },
-//   resultsSectionTitle: {
-//     fontSize: 20,
-//     fontWeight: "700",
-//     color: "#1f2937",
-//   },
-
-//   successBadge: {
-//     paddingVertical: 10,
-//     paddingHorizontal: 24,
-//     flexDirection: "row",
-//     alignItems: "center",
-//     alignSelf: "center", // Centered button
-//   },
-//   successBadgeText: {
-//     // color: "#fff",
-//     fontWeight: "bold",
-//     fontSize: 16,
-//   },
-//   shareIcon: {
-//     marginRight: 8,
-//     fontSize: 16,
-//     color: "#fff",
-//   },
-
-//   statsContainer: {
-//     flexDirection: "row",
-//     justifyContent: "space-between",
-//     marginBottom: 20,
-//   },
-//   statCard: {
-//     backgroundColor: "#fff",
-//     borderRadius: 12,
-//     padding: 16,
-//     flex: 1,
-//     marginHorizontal: 4,
-//     alignItems: "center",
-//     elevation: 2,
-//     shadowColor: "#000",
-//     shadowOffset: { width: 0, height: 2 },
-//     shadowOpacity: 0.1,
-//     shadowRadius: 4,
-//   },
-//   statNumber: {
-//     fontSize: 20,
-//     fontWeight: "700",
-//     color: "#f97316",
-//     marginBottom: 4,
-//   },
-//   statLabel: {
-//     fontSize: 14,
-//     color: "#6b7280",
-//   },
-//   resultsTable: {
-//     backgroundColor: "#fff",
-//     borderRadius: 12,
-//     overflow: "hidden",
-//     elevation: 2,
-//     marginHorizontal: 4,
-//     marginBottom: 24,
-//     shadowColor: "#000",
-//     shadowOffset: { width: 0, height: 2 },
-//     shadowOpacity: 0.1,
-//     shadowRadius: 4,
-//   },
-//   tableHeaderRow: {
-//     flexDirection: "row",
-//     backgroundColor: "#f9fafb",
-//     paddingVertical: 14,
-//     paddingHorizontal: 12,
-//     borderBottomWidth: 1,
-//     borderBottomColor: "#e5e7eb",
-//   },
-//   headerText: {
-//     fontWeight: "600",
-//     color: "#4b5563",
-//     fontSize: 14,
-//     textAlign: "center",
-//     flex: 1,
-//   },
-
-//   evenRow: {
-//     backgroundColor: "#f9fafb",
-//   },
-//   quantityBadge: {
-//     backgroundColor: "#dbeafe",
-//     paddingHorizontal: 10,
-//     paddingVertical: 4,
-//     borderRadius: 12,
-//     minWidth: 32,
-//   },
-//   pipeSizeText: {
-//     fontWeight: "600",
-//     color: "#1f2937",
-//   },
-//   cutsContainer: {
-//     flexDirection: "row",
-//     flexWrap: "wrap",
-//     justifyContent: "center",
-//     gap: 6,
-//   },
-//   cutPill: {
-//     backgroundColor: "#e5e7eb",
-//     paddingHorizontal: 8,
-//     paddingVertical: 4,
-//     borderRadius: 12,
-//   },
-//   cutText: {
-//     fontSize: 12,
-//     fontWeight: "500",
-//     color: "#1f2937",
-//   },
-
-//   quantityText: {
-//     color: "#1e40af",
-//     fontWeight: "600",
-//     textAlign: "center",
-//   },
-//   quantityBadgeText: {
-//     color: "#1e40af",
-//     fontWeight: "600",
-//     textAlign: "center",
-//   },
-//   wasteText: {
-//     fontWeight: "500",
-//     color: "#dc2626",
-//   },
-//   totalRow: {
-//     flexDirection: "row",
-//     backgroundColor: "#f3f4f6",
-//     paddingVertical: 14,
-//     paddingHorizontal: 12,
-//   },
-//   totalText: {
-//     fontWeight: "700",
-//     color: "#1f2937",
-//     textAlign: "center",
-//     flex: 1,
-//   },
-//   safe: {
-//     flex: 1,
-//     backgroundColor: "#f8fafc",
-//   },
-
-//   subtitle: {
-//     fontSize: 16,
-//     color: "#bfdbfe",
-//     textAlign: "center",
-//     fontWeight: "500",
-//   },
-
-//   header: {
-//     paddingTop: 50,
-//     paddingBottom: 25,
-//     paddingHorizontal: 20,
-//     borderBottomLeftRadius: 25,
-//     borderBottomRightRadius: 25,
-//     shadowColor: "#000",
-//     shadowOffset: { width: 0, height: 4 },
-//     shadowOpacity: 0.1,
-//     shadowRadius: 10,
-//   },
-//   title: {
-//     fontSize: 28,
-//     fontWeight: "800",
-//     color: "#fff",
-//     textAlign: "center",
-//     textShadowColor: "rgba(0,0,0,0.1)",
-//     textShadowOffset: { width: 0, height: 2 },
-//     textShadowRadius: 4,
-//     letterSpacing: 0.5,
-//   },
-
-//   scrollView: {
-//     flex: 1,
-//     marginTop: 20,
-//   },
-
-//   sectionSubtitle: {
-//     fontSize: 16,
-//     color: "#64748b",
-//     marginBottom: 20,
-//   },
-
-//   // Summary Table Styles
-//   summaryTable: {
-//     borderRadius: 16,
-//     overflow: "hidden",
-//     shadowRadius: 8,
-//   },
-
-//   summaryCell: {
-//     flex: 1,
-//     alignItems: "center",
-//   },
-//   summaryCellText: {
-//     fontSize: 14,
-//     fontWeight: "600",
-//     textAlign: "center",
-//   },
-//   wasteCellText: {
-//     fontSize: 14,
-//     fontWeight: "600",
-//     color: "#ef4444",
-//     textAlign: "center",
-//   },
-
-//   totalCellText: {
-//     fontSize: 16,
-//     fontWeight: "800",
-//     color: "#1e293b",
-//     textAlign: "center",
-//   },
-//   totalWasteCellText: {
-//     fontSize: 16,
-//     fontWeight: "800",
-//     color: "#ef4444",
-//     textAlign: "center",
-//   },
-
-//   metricsGrid: {
-//     flexDirection: "row",
-//     flexWrap: "wrap",
-//     justifyContent: "space-between",
-//     marginBottom: 16,
-//   },
-//   metricCard: {
-//     width: "48%",
-//     // backgroundColor: "#fef3c7", // Soft warm background
-//     padding: 12,
-//     borderRadius: 10,
-//     marginBottom: 10,
-//     borderColor: "#fcd34d",
-//     borderWidth: 1,
-//   },
-//   metricValue: {
-//     fontSize: 16,
-//     fontWeight: "700",
-//     color: "#f97316",
-//   },
-//   metricLabel: {
-//     fontSize: 12,
-//     color: "#6b7280",
-//   },
-
-//   layoutCard: {
-//     padding: 12,
-//     borderWidth: 1,
-//     borderColor: "#e5e7eb",
-//     borderRadius: 10,
-//     marginBottom: 16,
-//     // backgroundColor: "#fff", // Clean white background
-//   },
-//   layoutId: {
-//     fontWeight: "bold",
-//     marginBottom: 4,
-//     color: "#111827",
-//   },
-//   layoutInfo: {
-//     fontSize: 14,
-//     color: "#f97316",
-//     marginBottom: 8,
-//   },
-
-//   cutRow: {
-//     flexDirection: "row",
-//     justifyContent: "space-between",
-//     paddingVertical: 2,
-//   },
-//   cutLabel: {
-//     fontSize: 14,
-//     color: "#374151",
-//   },
-//   cutQty: {
-//     fontWeight: "600",
-//     color: "#f97316", // Orange emphasis
-//   },
-
-//   cutBar: {
-//     flexDirection: "row",
-//     marginVertical: 8,
-//     flexWrap: "wrap",
-//   },
-//   cutBlock: {
-//     backgroundColor: "#f97316", // Highlight color
-//     paddingVertical: 4,
-//     paddingHorizontal: 6,
-//     borderRadius: 4,
-//     margin: 2,
-//   },
-//   cutBlockText: {
-//     fontSize: 12,
-//     color: "#fff",
-//   },
-
-//   layoutFooter: {
-//     flexDirection: "row",
-//     justifyContent: "space-between",
-//     marginTop: 8,
-//   },
-//   footerText: {
-//     fontSize: 12,
-//     color: "#6b7280",
-//   },
-
-//   summarySection: {
-//     marginBottom: 16,
-//     padding: 10,
-//     backgroundColor: "#fff",
-//     borderRadius: 8,
-//     borderWidth: 1,
-//     borderColor: "#e5e7eb",
-//   },
-
-//   sectionTitle: {
-//     fontSize: 16,
-//     fontWeight: "700",
-//     color: "#111827",
-//     marginBottom: 8,
-//   },
-
-//   summaryHeader: {
-//     flexDirection: "row",
-//     paddingVertical: 6,
-//     backgroundColor: "#f9fafb",
-//     borderBottomWidth: 1,
-//   },
-
-//   summaryHeaderText: {
-//     width: "33.33%",
-//     fontSize: 14,
-//     fontWeight: "600",
-//     color: "#6b7280",
-//     textAlign: "center",
-//   },
-
-//   summaryRow: {
-//     flexDirection: "row",
-//     alignItems: "center",
-//     paddingVertical: 6,
-//     borderColor: "#f3f4f6",
-//   },
-
-//   summaryLabel: {
-//     width: "33.33%",
-//     fontSize: 14,
-//     color: "#374151",
-//     textAlign: "left",
-//     paddingLeft: 4,
-//   },
-
-//   summaryValue: {
-//     width: "33.33%",
-//     fontSize: 14,
-//     color: "#111827",
-//     textAlign: "center",
-//   },
-
-//   summaryQty: {
-//     width: "33.33%",
-//     fontSize: 14,
-//     fontWeight: "600",
-//     color: "#f97316",
-//     textAlign: "right",
-//     paddingRight: 4,
-//   },
-
-//   summaryTotalRow: {
-//     flexDirection: "row",
-//     justifyContent: "space-between",
-//     borderTopWidth: 1,
-//     borderColor: "#e5e7eb",
-//     marginTop: 6,
-//     paddingTop: 8,
-//   },
-// });
