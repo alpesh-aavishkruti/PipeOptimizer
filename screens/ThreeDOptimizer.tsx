@@ -410,7 +410,7 @@ export default function ThreeDOptimizer() {
             <View style={styles.inputCard}>
               <View style={styles.inputRow}>
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Sheet Length (inch)</Text>
+                  <Text style={styles.inputLabel}>Sheet Length (mm)</Text>
                   <TextInput
                     style={styles.input}
                     placeholder="e.g., 2440"
@@ -420,7 +420,7 @@ export default function ThreeDOptimizer() {
                   />
                 </View>
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Sheet Width (inch)</Text>
+                  <Text style={styles.inputLabel}>Sheet Width (mm)</Text>
                   <TextInput
                     style={styles.input}
                     placeholder="e.g., 1220"
@@ -503,7 +503,7 @@ export default function ThreeDOptimizer() {
               ) : (
                 <>
                   <View style={styles.tableHeader}>
-                    <Text style={styles.tableHeaderText}>Size (inch)</Text>
+                    <Text style={styles.tableHeaderText}>Size (mm)</Text>
                     <Text style={styles.tableHeaderText}>Stock</Text>
                     <Text style={styles.tableHeaderText}>Action</Text>
                   </View>
@@ -545,7 +545,7 @@ export default function ThreeDOptimizer() {
             <View style={styles.inputCard}>
               <View style={styles.inputRow}>
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Piece Length (inch)</Text>
+                  <Text style={styles.inputLabel}>Piece Length (mm)</Text>
                   <TextInput
                     style={styles.input}
                     placeholder="e.g., 600"
@@ -555,7 +555,7 @@ export default function ThreeDOptimizer() {
                   />
                 </View>
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Piece Width (inch)</Text>
+                  <Text style={styles.inputLabel}>Piece Width (mm)</Text>
                   <TextInput
                     style={styles.input}
                     placeholder="e.g., 400"
@@ -628,7 +628,7 @@ export default function ThreeDOptimizer() {
               ) : (
                 <>
                   <View style={styles.tableHeader}>
-                    <Text style={styles.tableHeaderText}>Size (inch)</Text>
+                    <Text style={styles.tableHeaderText}>Size (mm)</Text>
                     <Text style={styles.tableHeaderText}>Qty</Text>
                     <Text style={styles.tableHeaderText}></Text>
                   </View>
@@ -724,7 +724,7 @@ export default function ThreeDOptimizer() {
                   }, {} as Record<string, number>)
                 ).map(([sheetSize, totalCount]) => (
                   <View key={sheetSize} style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>{sheetSize} inch</Text>
+                    <Text style={styles.summaryLabel}>{sheetSize} mm</Text>
                     <Text style={styles.summaryQty}>× {totalCount as number}</Text>
                   </View>
                 ))}
@@ -744,7 +744,7 @@ export default function ThreeDOptimizer() {
                     (sum, piece) =>
                       sum + piece.length * piece.width * piece.quantity,
                     0
-                  )} inch (${totalPiecesCut})`}
+                  )} mm (${totalPiecesCut})`}
                 />
                 <MetricCard
                   label="Used sheets total area"
@@ -755,7 +755,7 @@ export default function ThreeDOptimizer() {
                         layout.sheetSize.width *
                         layout.count,
                     0
-                  )} inch`}
+                  )} mm`}
                 />
                 <MetricCard
                   label="Material Utilization"
